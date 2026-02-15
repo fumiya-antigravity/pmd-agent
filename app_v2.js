@@ -23,6 +23,117 @@
         aspectQuoted: {}, // 引用
         aspectExample: {}, // 具体例
         aspectStatus: {},  // AIが判定したステータス (ok/thin/empty)
+        // Supabase
+        sessionId: null,   // 現在のSupabaseセッションID (UUID)
+    };
+
+    /* ---------- DB SYNC LAYER (非破壊的永続化) ---------- */
+    const dbSync = {
+        enabled: false,
+
+        async init() {
+            try {
+                if (typeof SupabaseClient === 'undefined') {
+                    console.warn('[dbSync] SupabaseClient未読込。DB同期無効。');
+                    return;
+                }
+                const client = SupabaseClient.getClient();
+                if (!client) return;
+                this.enabled = true;
+                console.log('[dbSync] DB同期有効化');
+
+                // 既存セッション一覧をサイドバーに反映
+                const sessions = await SupabaseClient.listSessions(20);
+                if (sessions?.length) {
+                    sessions.forEach(s => {
+                        state.threadCounter++;
+                        const thread = {
+                            id: state.threadCounter,
+                            dbId: s.id,
+                            name: s.title,
+                            time: new Date(s.updated_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }),
+                            messagesHtml: '',
+                            phase: s.phase || 'WHY_SESSION',
+                            aspects: {},
+                            overview: '',
+                            whyText: '',
+                            isActive: false,
+                        };
+                        state.threads.push(thread);
+                    });
+                    renderThreads();
+                    console.log(`[dbSync] ${sessions.length}件のセッションを復元`);
+                }
+            } catch (e) {
+                console.warn('[dbSync] 初期化失敗:', e.message);
+                this.enabled = false;
+            }
+        },
+
+        async createSession(title, overview, whyText) {
+            if (!this.enabled) return null;
+            try {
+                const session = await SupabaseClient.createSession(title, overview, whyText);
+                state.sessionId = session.id;
+                console.log('[dbSync] セッション作成:', session.id);
+                return session;
+            } catch (e) {
+                console.warn('[dbSync] セッション作成失敗:', e.message);
+                return null;
+            }
+        },
+
+        async saveMessage(role, content, metadata = {}) {
+            if (!this.enabled || !state.sessionId) return null;
+            try {
+                return await SupabaseClient.saveMessage(state.sessionId, role, content, metadata);
+            } catch (e) {
+                console.warn('[dbSync] メッセージ保存失敗:', e.message);
+                return null;
+            }
+        },
+
+        async saveAspectState(aspectKey, updates) {
+            if (!this.enabled || !state.sessionId) return;
+            try {
+                await SupabaseClient.upsertAspectState(state.sessionId, aspectKey, updates);
+            } catch (e) {
+                console.warn(`[dbSync] 観点保存失敗(${aspectKey}):`, e.message);
+            }
+        },
+
+        async saveAnalysisResult(messageId, analysisType, result) {
+            if (!this.enabled || !state.sessionId) return;
+            try {
+                await SupabaseClient.saveAnalysisResult(state.sessionId, messageId, analysisType, result);
+            } catch (e) {
+                console.warn('[dbSync] 分析結果保存失敗:', e.message);
+            }
+        },
+
+        async updateSessionPhase(phase) {
+            if (!this.enabled || !state.sessionId) return;
+            try {
+                await SupabaseClient.updateSession(state.sessionId, { phase });
+            } catch (e) {
+                console.warn('[dbSync] フェーズ更新失敗:', e.message);
+            }
+        },
+
+        async loadSession(dbId) {
+            if (!this.enabled) return null;
+            try {
+                const [session, messages, aspectStates] = await Promise.all([
+                    SupabaseClient.getSession(dbId),
+                    SupabaseClient.getMessages(dbId, 50),
+                    SupabaseClient.getAllAspectStates(dbId),
+                ]);
+                return { session, messages, aspectStates };
+            } catch (e) {
+                console.warn('[dbSync] セッション読込失敗:', e.message);
+                return null;
+            }
+        },
     };
 
     const ASPECT_META = {
@@ -66,10 +177,11 @@
         dom.previewBtn = $('#preview-btn');
     }
 
-    function init() {
+    async function init() {
         cacheDom();
         bindAll();
-        console.log('[PdM v2.2] initialized (API mode + 3s delay)');
+        await dbSync.init();
+        console.log('[PdM v2.3] initialized (API mode + Supabase)');
     }
 
     function bindAll() {
@@ -212,8 +324,16 @@
         state.activeThreadId = thread.id;
         renderThreads();
 
+        // 🔹 Supabaseセッション作成
+        const dbSession = await dbSync.createSession(name, overview, whyText);
+        if (dbSession) {
+            thread.dbId = dbSession.id;
+        }
+
         // Initial User Message (History)
         addMsg('user', `## 概要\n${overview}\n\n## Why\n${whyText}`);
+        // 🔹 初回メッセージをDB保存
+        dbSync.saveMessage('user', `## 概要\n${overview}\n\n## Why\n${whyText}`);
 
         // Transition
         dom.welcomeView.classList.add('fade-out');
@@ -232,6 +352,7 @@
         state.aspectExample = {};
         state.summaryVol = 0; // Initialize volume counter
         updatePhase('WHY_SESSION');
+        dbSync.updateSessionPhase('WHY_SESSION');
         dom.topBarTitle.textContent = name;
         dom.chatInput.disabled = true;
 
@@ -340,6 +461,8 @@
        ======================================== */
     async function actualSend(text) {
         state.conversationHistory.push({ role: 'user', content: text });
+        // 🔹 ユーザーメッセージをDB保存
+        const userMsgRecord = await dbSync.saveMessage('user', text);
         showTyping();
 
         try {
@@ -473,6 +596,46 @@
                     }
                 }
                 state.conversationHistory.push({ role: 'assistant', content: historyEntry });
+
+                // 🔹 AIメッセージをDB保存
+                const aiMsgRecord = await dbSync.saveMessage('assistant', historyEntry, {
+                    aspectUpdate: update || null,
+                    relatedUpdates: result.relatedUpdates || [],
+                });
+
+                // 🔹 分析結果をDB保存
+                dbSync.saveAnalysisResult(
+                    aiMsgRecord?.id || null,
+                    state.deepDiveMode ? 'deep_dive' : 'why_session',
+                    result
+                );
+
+                // 🔹 観点状態をDB保存
+                if (update?.aspect) {
+                    dbSync.saveAspectState(update.aspect, {
+                        status: update.status || 'thin',
+                        text_content: update.text || '',
+                        reason: update.reason || '',
+                        advice: update.advice || '',
+                        quoted: update.quoted || '',
+                        example: update.example || '',
+                        updated_by: 'ai_direct',
+                    });
+                }
+                // 🔹 relatedUpdatesの観点もDB保存
+                if (result.relatedUpdates?.length) {
+                    result.relatedUpdates.forEach(ru => {
+                        if (ru.aspect && ru.action !== 'skip' && ru.newText?.trim()) {
+                            dbSync.saveAspectState(ru.aspect, {
+                                status: ru.newStatus || 'thin',
+                                text_content: ru.newText || '',
+                                reason: ru.reason || '',
+                                advice: ru.advice || '',
+                                updated_by: 'ai_related',
+                            });
+                        }
+                    });
+                }
             }
 
             // Next aspect — Flows層の決定論的遷移制御
@@ -614,6 +777,7 @@
         state.currentAspect = null;
         state.deepDiveMode = false;
         state.conversationHistory = [];
+        state.sessionId = null;  // 🔹 DBセッションリセット
         dom.topBarTitle.textContent = '💎 PdM Assistant';
         dom.startBtn.disabled = true;
         dom.startBtn.textContent = '🚀 壁打ちを開始する';
@@ -621,7 +785,7 @@
         checkForm();
     }
 
-    function switchThread(id) {
+    async function switchThread(id) {
         if (id === state.activeThreadId) return;
         if (state.sending) cancelSend();
         saveThread();
@@ -629,6 +793,56 @@
         state.activeThreadId = id;
         const thread = state.threads.find(t => t.id === id);
         if (!thread) return;
+
+        // 🔹 DBセッションIDを設定
+        state.sessionId = thread.dbId || null;
+
+        // 🔹 DBからデータを読み込み（dbIdがある場合）
+        if (thread.dbId && dbSync.enabled && !thread.messagesHtml) {
+            try {
+                const data = await dbSync.loadSession(thread.dbId);
+                if (data) {
+                    // セッション情報を復元
+                    thread.overview = data.session.overview || '';
+                    thread.whyText = data.session.why_text || '';
+                    thread.phase = data.session.phase || 'WHY_SESSION';
+
+                    // 観点状態を復元
+                    if (data.aspectStates) {
+                        for (const [key, as] of Object.entries(data.aspectStates)) {
+                            thread.aspects = thread.aspects || {};
+                            thread.aspects[key] = as.text_content || '';
+                            state.aspectStatus[key] = as.status || 'empty';
+                            if (as.reason) state.aspectReason[key] = as.reason;
+                            if (as.advice) state.aspectAdvice[key] = as.advice;
+                            if (as.quoted) state.aspectQuoted[key] = as.quoted;
+                            if (as.example) state.aspectExample[key] = as.example;
+                        }
+                    }
+
+                    // 会話履歴を復元
+                    if (data.messages?.length) {
+                        thread.conversationHistory = data.messages.map(m => ({
+                            role: m.role, content: m.content,
+                        }));
+                        // メッセージHTMLを再構築
+                        let html = '';
+                        data.messages.forEach(m => {
+                            if (m.role === 'system') {
+                                html += `<div class="msg system"><div>${esc(m.content)}</div></div>`;
+                            } else {
+                                const roleLabel = m.role === 'assistant' ? '🤖 AI' : '👤 あなた';
+                                html += `<div class="msg ${m.role === 'assistant' ? 'ai' : 'user'}"><div class="msg-role">${roleLabel}</div><div>${fmt(m.content)}</div></div>`;
+                            }
+                        });
+                        thread.messagesHtml = html;
+                    }
+                    console.log(`[switchThread] DBからセッション復元: ${thread.dbId}`);
+                }
+            } catch (e) {
+                console.warn('[switchThread] DB読み込み失敗:', e.message);
+            }
+        }
 
         if (thread.phase === 'INPUT') {
             dom.sessionView.classList.add('hidden');
