@@ -2,7 +2,7 @@
     "version": 2,
     "framework": null,
     "buildCommand": null,
-    "outputDirectory": "public",
+    "outputDirectory": ".",
     "rewrites": [
         {
             "source": "/api/:path*",
