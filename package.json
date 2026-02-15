@@ -2,16 +2,12 @@
   "name": "pdm-agent",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "壁打ちAIパートナー — PdM向け要件定義支援ツール",
   "scripts": {
-    "dev": "vercel dev",
-    "build": "echo 'No build step needed'",
-    "start": "vercel dev"
+    "build": "echo 'No build step needed'"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1"
-  },
-  "devDependencies": {
-    "vercel": "^39.0.0"
   }
 }
