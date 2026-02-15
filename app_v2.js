@@ -425,7 +425,19 @@
             // AI message
             if (result.message) {
                 addMsg('ai', result.message);
-                state.conversationHistory.push({ role: 'assistant', content: result.message });
+                // 会話履歴にはmessageだけでなく、分析結果のサマリーも含める
+                // これによりAIが次のターンで「前回何を分析・更新したか」を把握できる
+                let historyEntry = result.message;
+                if (update) {
+                    historyEntry += `\n[分析結果: ${update.aspect}=${update.status}, text要約="${(update.text || '').substring(0, 100)}"]`;
+                }
+                if (result.relatedUpdates?.length) {
+                    const applied = result.relatedUpdates.filter(ru => ru.action !== 'skip' && ru.relevanceScore >= 0.7);
+                    if (applied.length) {
+                        historyEntry += `\n[関連更新: ${applied.map(ru => `${ru.aspect}=${ru.newStatus}`).join(', ')}]`;
+                    }
+                }
+                state.conversationHistory.push({ role: 'assistant', content: historyEntry });
             }
 
             // Next aspect — Flows層の決定論的遷移制御
@@ -660,6 +672,8 @@
         el.innerHTML = `<div>${text}</div>`;
         dom.chatMessages.appendChild(el);
         scroll();
+        // システムメッセージも会話履歴に含める（AIが文脈を把握できるように）
+        state.conversationHistory.push({ role: 'system', content: `[システム] ${text}` });
     }
 
     function addThinkingBlock(title, bodyHtml, badge) {
