@@ -48,7 +48,9 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        """静的ファイル配信（CORSヘッダー付き）"""
+        """静的ファイル配信（/ → index_v2.html にリダイレクト）"""
+        if self.path == '/' or self.path == '/index.html':
+            self.path = '/index_v2.html'
         super().do_GET()
 
     def do_POST(self):
