@@ -417,7 +417,10 @@ WHY_SESSIONと同じ人格で振る舞え。壁打ちパートナーとして、
     const reply = data.reply;
 
     // 既にオブジェクトなら直接返す
-    if (typeof reply === 'object' && reply !== null) return reply;
+    if (typeof reply === 'object' && reply !== null) {
+      console.log('[callAPI] レスポンス(object):', JSON.stringify(reply, null, 2));
+      return reply;
+    }
 
     // 文字列をパース
     try {
@@ -456,7 +459,59 @@ WHY_SESSIONと同じ人格で振る舞え。壁打ちパートナーとして、
     ], signal);
 
     // 多段階検証: thin判定時のみ
-    return verifyAndMerge(r1, userMessage, CORE_RULES + '\n\n' + phasePrompt, signal);
+    const verified = await verifyAndMerge(r1, userMessage, CORE_RULES + '\n\n' + phasePrompt, signal);
+
+    // relatedUpdates補完ステップ:
+    // AIがrelatedUpdatesを返さなかった場合、2回目のAPI呼び出しで他観点への影響を分析
+    const hasValidUpdates = verified.relatedUpdates?.some(ru =>
+      ru.action && ru.action !== 'skip' && ru.newText?.trim()
+    );
+
+    if (!hasValidUpdates) {
+      console.log('[chat] relatedUpdatesが不十分。補完ステップを実行します。');
+      try {
+        const otherAspects = Object.entries(aspects)
+          .filter(([k]) => k !== currentAspect)
+          .map(([k, v]) => `${k}: 「${v || '（空）'}」 (status: ${aspectStatus?.[k] || 'unknown'})`)
+          .join('\n');
+
+        const supplementResult = await callAPI([
+          {
+            role: 'system', content: `あなたは要件定義の観点を横断的に分析する専門家です。
+ユーザーの発言が、現在フォーカスしている観点（${currentAspect}）以外の観点にどう関連するかを分析してください。
+
+## 現在の他観点の状態
+${otherAspects}
+
+## ルール
+- 各観点について、ユーザーの発言から推測・補完できる情報がある場合は必ず更新する
+- 直接言及されていなくても、文脈から推測できる情報は積極的に追加する
+- 例: ユーザーが「ジュニアメンバーにも使ってもらいたい」と言った場合、target観点を「ジュニアメンバー」で更新する
+- newTextは更新後の全文を記述する（既存textの内容を含めた上で新情報を追加）
+
+## JSON形式
+{
+  "relatedUpdates": [
+    {"aspect": "観点キー", "relevanceScore": 0.8, "action": "append|overwrite", "reason": "更新理由", "newText": "更新後の全文（3行以上）", "newStatus": "ok|thin"}
+  ]
+}
+関連がない観点は含めなくてよい。ただし、ユーザーの発言から推測可能な情報が少しでもあれば、推測して含めよ。` },
+          { role: 'user', content: `ユーザーの発言:\n${userMessage}\n\n会話の文脈:\n${(conversationHistory || []).slice(-4).map(m => `${m.role}: ${m.content}`).join('\n')}` },
+        ], signal);
+
+        if (supplementResult.relatedUpdates?.length) {
+          console.log('[chat] 補完ステップでrelatedUpdatesを取得:', supplementResult.relatedUpdates.length, '件');
+          verified.relatedUpdates = [
+            ...(verified.relatedUpdates || []),
+            ...supplementResult.relatedUpdates,
+          ];
+        }
+      } catch (e) {
+        console.warn('[chat] relatedUpdates補完ステップ失敗:', e.message);
+      }
+    }
+
+    return verified;
   }
 
   async function checkAspects(aspects, signal) {

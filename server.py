@@ -91,6 +91,18 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
             with urllib.request.urlopen(req, timeout=120) as resp:
                 result = json.loads(resp.read().decode('utf-8'))
                 reply = result['choices'][0]['message']['content']
+                # デバッグ: AIのレスポンス構造をログに出力
+                try:
+                    parsed = json.loads(reply)
+                    has_related = 'relatedUpdates' in parsed
+                    related_count = len(parsed.get('relatedUpdates', []))
+                    related_aspects = [ru.get('aspect', '?') for ru in parsed.get('relatedUpdates', [])]
+                    print(f'[AI Response] relatedUpdates: {has_related}, count: {related_count}, aspects: {related_aspects}')
+                    if parsed.get('aspectUpdate'):
+                        au = parsed['aspectUpdate']
+                        print(f'[AI Response] aspectUpdate: aspect={au.get("aspect")}, status={au.get("status")}')
+                except Exception:
+                    print(f'[AI Response] JSON parse failed, raw length: {len(reply)}')
                 self._send_json(200, {
                     'reply': reply,
                     'model': result.get('model', MODEL),
