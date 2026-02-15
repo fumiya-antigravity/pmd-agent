@@ -300,7 +300,15 @@
             // AI message
             if (result.message) {
                 addMsg('ai', result.message);
-                state.conversationHistory.push({ role: 'assistant', content: result.message });
+                // 初回分析のメタデータも会話履歴に含める
+                let historyEntry = result.message;
+                if (result.aspectUpdates) {
+                    const summary = Object.entries(result.aspectUpdates)
+                        .map(([k, v]) => `${k}=${v.status}`)
+                        .join(', ');
+                    historyEntry += `\n[初回分析: ${summary}]`;
+                }
+                state.conversationHistory.push({ role: 'assistant', content: historyEntry });
             }
 
             // Next aspect
@@ -391,24 +399,51 @@
 
             // Related aspect updates (関連観点の連動更新)
             if (result.relatedUpdates?.length) {
+                console.log('[relatedUpdates] AIから返却:', JSON.stringify(result.relatedUpdates, null, 2));
+                const appliedUpdates = [];
                 result.relatedUpdates.forEach(ru => {
-                    if (!ru.aspect || ru.action === 'skip') return;
-                    if (ru.relevanceScore < 0.7) return; // 0.7未満は更新しない
-                    if (ru.contradictionCheck?.includes('矛盾')) return; // 矛盾がある場合は更新しない
+                    if (!ru.aspect) { console.log('[relatedUpdates] aspectなし、スキップ:', ru); return; }
+                    if (ru.action === 'skip') { console.log(`[relatedUpdates] ${ru.aspect}: action=skip`); return; }
+                    // relevanceScoreがない場合はデフォルト0.8として処理（AIが省略するケースに対応）
+                    const score = ru.relevanceScore ?? 0.8;
+                    if (score < 0.7) { console.log(`[relatedUpdates] ${ru.aspect}: relevanceScore=${score} < 0.7、スキップ`); return; }
+                    if (ru.contradictionCheck?.includes('矛盾')) { console.log(`[relatedUpdates] ${ru.aspect}: 矛盾あり、スキップ`); return; }
 
-                    if (ru.action === 'append' && state.aspects[ru.aspect]) {
-                        // 追記: 既存textに新情報を追加
-                        state.aspects[ru.aspect] = ru.newText || (state.aspects[ru.aspect] + '\n' + (ru.reason || ''));
-                    } else if (ru.action === 'overwrite' || !state.aspects[ru.aspect]) {
-                        // 上書き or 新規
-                        state.aspects[ru.aspect] = ru.newText || '';
+                    // actionがない場合のフォールバック: テキストがあれば自動追記
+                    const action = ru.action || (state.aspects[ru.aspect] ? 'append' : 'overwrite');
+
+                    // newTextが空の場合のガード
+                    if (!ru.newText?.trim()) {
+                        console.log(`[relatedUpdates] ${ru.aspect}: newTextが空、スキップ`);
+                        return;
+                    }
+
+                    if (action === 'append' && state.aspects[ru.aspect]) {
+                        state.aspects[ru.aspect] = ru.newText;
+                    } else {
+                        state.aspects[ru.aspect] = ru.newText;
                     }
                     if (ru.newStatus) {
                         state.aspectStatus[ru.aspect] = ru.newStatus;
                     }
+                    // reason/advice/quoted/example も保存（問題#1の修正）
+                    if (ru.reason) state.aspectReason[ru.aspect] = ru.reason;
+                    if (ru.advice) state.aspectAdvice[ru.aspect] = ru.advice;
+                    if (ru.quoted) state.aspectQuoted[ru.aspect] = ru.quoted;
+                    if (ru.example) state.aspectExample[ru.aspect] = ru.example;
+
                     updateAspectCard(ru.aspect, state.aspects[ru.aspect]);
+                    appliedUpdates.push(ru.aspect);
+                    console.log(`[relatedUpdates] ${ru.aspect}: 更新成功 (action=${action}, status=${ru.newStatus})`);
                 });
-                updateProgress();
+                if (appliedUpdates.length) {
+                    updateProgress();
+                    // 更新をチャットに表示（ユーザーに可視化）
+                    const labels = appliedUpdates.map(a => ASPECT_META[a]?.label || a).join('、');
+                    addSystemMsg(`🔄 関連する観点を更新しました: ${labels}`);
+                }
+            } else {
+                console.log('[relatedUpdates] AIからrelatedUpdatesが返されませんでした');
             }
             if (result.contamination?.detected && result.contamination.items?.length) {
                 let html = '';

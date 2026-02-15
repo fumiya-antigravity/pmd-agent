@@ -249,20 +249,30 @@ textに含めるべき情報:
 - 更新後のtextとstatusは必ず整合させること（textが充実しているのにstatusがemptyなどは不可）
 - 既存textと矛盾する場合は更新せず、矛盾をmessageで指摘してユーザーに確認する
 
-> 重要: relatedUpdatesが空配列[]になるケースは稀であるべき。ユーザーが何か有意義な発言をした場合、たいてい複数の観点に関連する。空配列を返す前に「本当にこの発言は他の観点に全く無関係か？」を自問せよ。
+> 禁止: relatedUpdatesを空配列[]にすることは禁止。ユーザーが何か発言した場合、必ず全ての他観点をスキャンし、1つ以上のrelatedUpdateを生成せよ。
+> もし本当に関連がない場合のみ、action='skip'で全観点を列挙せよ（理由を明記）。
+> 空配列[]を返した場合、システムはエラーとして処理する。
+
+### relatedUpdatesの必須チェックリスト（毎回実行）
+1. background: ユーザーの発言から背景に追記できる情報はないか？
+2. problem: ユーザーの発言から課題の具体化に使える情報はないか？
+3. target: ユーザーの発言からターゲットを推測できないか？
+4. impact: ユーザーの発言から期待効果の具体化に使える情報はないか？
+5. urgency: ユーザーの発言から今やる理由を推測できないか？
+※ フォーカス中の観点は除く（aspectUpdateで処理済み）
 
 ## JSON形式
 {
   "thinking": "文脈推論: ユーザーの発言の意図、会話履歴との関連、裏にある本質、他の観点への横展開可能性（5行以上）",
   "aspectUpdate": {"aspect": "観点キー", "status": "ok|thin|empty", "text": "累積要約（3行以上、事実+推論+未解決の問い）", "quoted": "ユーザー原文引用（20文字以上）", "reason": "分析理由（4文以上）", "advice": "アドバイス（4文以上）", "example": "記述例（4文以上、指示禁止）"},
   "relatedUpdates": [
-    {"aspect": "関連する観点キー", "relevanceScore": 0.8, "action": "append|overwrite|skip", "reason": "更新理由", "newText": "更新後のtext", "newStatus": "ok|thin", "contradictionCheck": "既存textとの矛盾有無"}
+    {"aspect": "関連する観点キー", "relevanceScore": 0.8, "action": "append|overwrite|skip", "reason": "更新理由", "newText": "更新後のtext（3行以上）", "newStatus": "ok|thin", "contradictionCheck": "既存textとの矛盾有無"}
   ],
   "contamination": {"detected": false, "items": []},
   "message": "フィードバック。まず回答の良い点を褒める（共感）。その上で次の質問へ（メンター口調、400文字以内）",
   "nextAspect": "次の観点キー or null(現在の観点を継続)"
 }
-relatedUpdatesがない場合は空配列[]とせよ。`,
+relatedUpdatesは空配列にしないこと。必ず1つ以上の観点を含めよ。`,
 
     DEEP_DIVE: `## タスク: 深掘り対話
 特定観点についてソクラテス式で深掘り。ユーザーの気づきを促せ。
