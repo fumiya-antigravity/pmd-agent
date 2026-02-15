@@ -5,6 +5,10 @@
     "outputDirectory": ".",
     "rewrites": [
         {
+            "source": "/",
+            "destination": "/index_v2.html"
+        },
+        {
             "source": "/api/:path*",
             "destination": "/api/:path*"
         }
