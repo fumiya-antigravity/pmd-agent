@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="PdMアシスタント - WhyとWhatの深掘りに特化した要件定義支援AIエージェント">
+    <title>PdM Assistant - 要件定義アシスタント</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <!-- ===== ホーム画面 ===== -->
+    <section id="home-screen" class="screen active">
+        <div class="home-container">
+            <div class="home-logo">
+                <div class="logo-icon">💎</div>
+                <h1>PdM Assistant</h1>
+                <p class="home-tagline">WhyとWhatの深掘りに特化した<br>要件定義支援AIエージェント</p>
+            </div>
+            <div class="home-form glass-card">
+                <label for="project-name-input" class="form-label">プロジェクト名</label>
+                <input type="text" id="project-name-input" class="form-input" placeholder="例: 社内教育プラットフォーム">
+                <button id="create-project-btn" class="btn btn-primary" disabled>
+                    <span>新規プロジェクトを作成</span>
+                    <span class="btn-arrow">→</span>
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== メイン画面 ===== -->
+    <section id="main-screen" class="screen">
+        <!-- ヘッダー -->
+        <header class="app-header">
+            <div class="header-left">
+                <button id="sidebar-toggle-btn" class="btn btn-ghost btn-icon-sm" title="スレッド一覧">☰</button>
+                <div class="header-logo">💎</div>
+                <h2 id="header-project-name" class="header-title">プロジェクト名</h2>
+            </div>
+            <div class="phase-indicator" id="phase-indicator">
+                <div class="phase-step active" data-phase="INPUT">
+                    <span class="phase-number">1</span><span class="phase-label">入力</span>
+                </div>
+                <div class="phase-connector"></div>
+                <div class="phase-step" data-phase="WHY_SESSION">
+                    <span class="phase-number">2</span><span class="phase-label">Why</span>
+                </div>
+                <div class="phase-connector"></div>
+                <div class="phase-step" data-phase="WHAT_SESSION">
+                    <span class="phase-number">3</span><span class="phase-label">What</span>
+                </div>
+                <div class="phase-connector"></div>
+                <div class="phase-step" data-phase="APPROACH_SESSION">
+                    <span class="phase-number">4</span><span class="phase-label">方針</span>
+                </div>
+                <div class="phase-connector"></div>
+                <div class="phase-step" data-phase="DONE">
+                    <span class="phase-number">5</span><span class="phase-label">完了</span>
+                </div>
+            </div>
+            <div class="header-actions">
+                <button id="preview-btn" class="btn btn-ghost btn-sm">📄 プレビュー</button>
+                <button id="history-toggle-btn" class="btn btn-ghost btn-sm hidden">📝 履歴</button>
+            </div>
+        </header>
+
+        <!-- メインコンテンツ 3カラム -->
+        <div class="main-content">
+
+            <!-- ============================================
+                 スレッドサイドバー
+                 ============================================ -->
+            <aside class="thread-sidebar" id="thread-sidebar">
+                <div class="thread-sidebar-header">
+                    <span class="thread-sidebar-title">スレッド</span>
+                    <button id="new-thread-btn" class="btn btn-primary btn-sm">＋ 新規</button>
+                </div>
+                <div class="thread-list" id="thread-list">
+                    <!-- JS: Thread items appear here -->
+                </div>
+            </aside>
+
+            <!-- ============================================
+                 左パネル: ガイド（参照特化）
+                 ============================================ -->
+            <aside class="left-panel" id="left-panel">
+                <div class="panel-header">
+                    <div class="panel-header-text">
+                        <h3 class="panel-title">📝 ガイド</h3>
+                        <p class="panel-subtitle">AIが整理した観点を確認</p>
+                    </div>
+                    <div class="panel-header-actions">
+                        <button id="discuss-selected-btn" class="btn btn-primary btn-sm hidden" disabled>
+                            💬 壁打ち (<span id="selected-count">0</span>)
+                        </button>
+                    </div>
+                </div>
+
+                <div class="left-panel-scroll" id="left-panel-scroll">
+                    <!-- 初期入力 -->
+                    <div class="guide-step" id="step-overview" data-step="1">
+                        <div class="step-header">
+                            <span class="step-number">STEP 1</span>
+                            <span class="step-title">概要</span>
+                        </div>
+                        <div class="step-body">
+                            <p class="step-guide">実現したいことを気軽に書いてください</p>
+                            <textarea id="overview-input" class="form-textarea" rows="2"
+                                placeholder="例: ジュニアPdMが簡単に要件定義書を作れるAIアシスタント"></textarea>
+                        </div>
+                    </div>
+
+                    <div class="guide-step" id="step-why" data-step="2">
+                        <div class="step-header">
+                            <span class="step-number">STEP 2</span>
+                            <span class="step-title">Why（なぜやるのか？）</span>
+                        </div>
+                        <div class="step-body">
+                            <p class="step-guide">思いつくままで大丈夫。なぜこれが必要か教えてください</p>
+                            <textarea id="why-input" class="form-textarea" rows="3"
+                                placeholder="例: 要件定義の書き方が人によってバラバラで、レビューに毎回時間がかかっている"></textarea>
+                            <button id="start-session-btn" class="btn btn-primary btn-start" disabled>
+                                🚀 壁打ちを開始する
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- AI観点セクション -->
+                    <div class="aspects-section hidden" id="aspects-section">
+                        <div class="section-divider">
+                            <span>🤖 AIが整理した観点</span>
+                            <span class="aspect-count-badge" id="aspect-count-badge">0/5</span>
+                        </div>
+                        <div id="aspect-list"></div>
+                    </div>
+
+                    <!-- What -->
+                    <div class="guide-step hidden locked" id="step-what" data-step="3">
+                        <div class="step-header">
+                            <span class="step-number">STEP 3</span>
+                            <span class="step-title">What（何を作るのか?）</span>
+                            <span class="step-lock">🔒</span>
+                        </div>
+                        <div class="step-body">
+                            <div class="what-card"><label class="form-label-sm">💡 提供する価値</label><textarea
+                                    class="form-textarea what-field" data-key="value" rows="2" disabled
+                                    placeholder="Why確定後に入力可能"></textarea></div>
+                            <div class="what-card"><label class="form-label-sm">📐 スコープ</label><textarea
+                                    class="form-textarea what-field" data-key="scope" rows="2" disabled
+                                    placeholder="Why確定後に入力可能"></textarea></div>
+                            <div class="what-card"><label class="form-label-sm">📊 成功指標</label><textarea
+                                    class="form-textarea what-field" data-key="success" rows="2" disabled
+                                    placeholder="Why確定後に入力可能"></textarea></div>
+                        </div>
+                    </div>
+
+                    <!-- 方針 -->
+                    <div class="guide-step hidden locked" id="step-approach" data-step="4">
+                        <div class="step-header">
+                            <span class="step-number">STEP 4</span>
+                            <span class="step-title">方針選定</span>
+                            <span class="step-lock">🔒</span>
+                        </div>
+                        <div class="step-body">
+                            <div id="approach-table-container" class="hidden"></div>
+                            <div id="approach-selection" class="hidden">
+                                <label class="form-label-sm">選定理由（100文字以上）</label>
+                                <textarea id="approach-reason" class="form-textarea" rows="3"
+                                    placeholder="なぜこの方針を選んだのか"></textarea>
+                                <div class="char-count"><span id="approach-reason-count">0</span> / 100</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- アクションバー -->
+                <div class="action-bar" id="action-bar">
+                    <button id="confirm-why-btn" class="btn btn-primary btn-action hidden">🔍 観点をチェックする</button>
+                    <button id="submit-what-btn" class="btn btn-primary btn-action hidden">📤 Whatを壁打ち</button>
+                    <button id="brainstorm-approach-btn" class="btn btn-primary btn-action hidden">💡 方針を洗い出す</button>
+                    <button id="finalize-approach-btn" class="btn btn-success btn-action hidden">🎯 方針を確定する</button>
+                </div>
+            </aside>
+
+            <!-- ============================================
+                 右パネル: 思考プロセス & チャット
+                 ============================================ -->
+            <main class="right-panel" id="right-panel">
+                <div class="panel-header">
+                    <div class="panel-header-text">
+                        <h3 class="panel-title">💬 思考プロセス</h3>
+                        <p class="panel-subtitle" id="current-thread-label">壁打ちを始めましょう</p>
+                    </div>
+                    <div class="thinking-progress" id="thinking-progress">
+                        <span class="progress-label">整理度</span>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+                        </div>
+                        <span class="progress-pct" id="progress-pct">0%</span>
+                    </div>
+                </div>
+
+                <div class="chat-scroll" id="chat-scroll">
+                    <div class="chat-messages" id="chat-messages">
+                        <div class="chat-welcome">
+                            <div class="welcome-icon">💎</div>
+                            <h3>壁打ちを始めましょう</h3>
+                            <p>左パネルに概要とWhyを入力して<br>「🚀 壁打ちを開始する」を押してください</p>
+                            <div class="welcome-steps">
+                                <div class="welcome-step"><span class="ws-num">1</span><span>概要とWhyを入力</span></div>
+                                <div class="welcome-step"><span class="ws-num">2</span><span>AIが観点を分析・整理</span></div>
+                                <div class="welcome-step"><span class="ws-num">3</span><span>左の観点を選んで壁打ち</span></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="chat-input-area" id="chat-input-area">
+                    <textarea id="chat-input" class="chat-textarea" placeholder="メッセージを入力..." rows="1"
+                        disabled></textarea>
+                    <button id="chat-send-btn" class="btn btn-primary btn-icon" disabled>↑</button>
+                </div>
+            </main>
+        </div>
+
+        <!-- フッター -->
+        <footer class="learning-footer">
+            <div class="learning-summary">
+                <span>💡</span>
+                <span id="learning-count">0</span> つの観点が改善されました
+            </div>
+            <button id="learning-detail-btn" class="btn btn-ghost btn-sm">詳細を見る</button>
+        </footer>
+    </section>
+
+    <!-- Modals -->
+    <div class="modal-overlay hidden" id="history-modal">
+        <div class="modal glass-card">
+            <div class="modal-header">
+                <h3>📝 修正履歴</h3><button class="btn btn-ghost btn-sm modal-close" data-modal="history-modal">✕</button>
+            </div>
+            <div class="modal-body" id="history-content"></div>
+        </div>
+    </div>
+    <div class="modal-overlay hidden" id="preview-modal">
+        <div class="modal modal-lg glass-card">
+            <div class="modal-header">
+                <h3>📄 要件定義書プレビュー</h3><button class="btn btn-ghost btn-sm modal-close"
+                    data-modal="preview-modal">✕</button>
+            </div>
+            <div class="modal-body" id="preview-content"></div>
+        </div>
+    </div>
+    <div class="modal-overlay hidden" id="learning-modal">
+        <div class="modal glass-card">
+            <div class="modal-header">
+                <h3>💡 学習サマリー</h3><button class="btn btn-ghost btn-sm modal-close"
+                    data-modal="learning-modal">✕</button>
+            </div>
+            <div class="modal-body" id="learning-content"></div>
+        </div>
+    </div>
+
+    <script src="ai_logic.js"></script>
+    <script src="app.js"></script>
+</body>
+
+</html>

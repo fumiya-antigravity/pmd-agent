@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="PdMアシスタント - WhyとWhatの深掘りに特化した要件定義支援AIエージェント">
+    <title>PdM Assistant v2</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="styles_v2.css?v=20260216f">
+</head>
+
+<body>
+    <div class="app-shell">
+
+        <!-- ============================================
+             サイドバー（デフォルト非表示・Gemini風）
+             ============================================ -->
+        <aside class="sidebar collapsed" id="sidebar">
+            <div class="sidebar-header">
+                <span class="sidebar-logo">💎 PdM</span>
+                <button id="new-thread-btn" class="sidebar-new-btn">＋ 新規</button>
+            </div>
+            <div class="sidebar-threads" id="sidebar-threads"></div>
+        </aside>
+
+        <!-- ============================================
+             メインカラム
+             ============================================ -->
+        <div class="main-col">
+
+            <!-- ヘッダー（最小限） -->
+            <header class="top-bar">
+                <div class="top-bar-left">
+                    <button id="sidebar-toggle" class="icon-btn" title="スレッド一覧">☰</button>
+                    <span class="top-bar-title" id="top-bar-title">💎 PdM Assistant</span>
+                </div>
+                <div class="phase-dots" id="phase-dots">
+                    <span class="dot active" data-phase="INPUT"></span>
+                    <span class="dot" data-phase="WHY_SESSION"></span>
+                    <span class="dot" data-phase="WHAT_SESSION"></span>
+                    <span class="dot" data-phase="APPROACH_SESSION"></span>
+                </div>
+                <div class="top-bar-right">
+                    <button id="preview-btn" class="text-btn">📄 プレビュー</button>
+                </div>
+            </header>
+
+            <!-- コンテンツエリア -->
+            <div class="content-area" id="content-area">
+
+                <!-- Phase: 初回入力（フルセンター） -->
+                <div class="welcome-view" id="welcome-view">
+                    <div class="welcome-inner">
+                        <h1 class="welcome-title">💎 何を作りたいですか？</h1>
+                        <p class="welcome-sub">思いつくまま書いてみてください。AIが壁打ち相手になります。</p>
+                        <div class="welcome-form">
+                            <div class="wf-group">
+                                <label class="wf-label"><span class="wf-num">1</span> 概要</label>
+                                <textarea id="overview-input" class="wf-textarea" rows="2"
+                                    placeholder="例: ジュニアPdMが簡単に要件定義書を作れるAIアシスタント"></textarea>
+                            </div>
+                            <div class="wf-group">
+                                <label class="wf-label"><span class="wf-num">2</span> なぜやりたい？</label>
+                                <textarea id="why-input" class="wf-textarea" rows="3"
+                                    placeholder="例: 要件定義の書き方が人によってバラバラで、レビューに毎回時間がかかっている"></textarea>
+                            </div>
+                            <button id="start-btn" class="primary-btn lg" disabled>🚀 壁打ちを開始する</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Phase: セッション中 (チャット + 右パネル) -->
+                <div class="session-view hidden" id="session-view">
+
+                    <!-- チャットエリア（メイン） -->
+                    <div class="chat-col">
+                        <div class="chat-scroll" id="chat-scroll">
+                            <div class="chat-messages" id="chat-messages"></div>
+                        </div>
+                        <div class="chat-bar">
+                            <textarea id="chat-input" class="chat-input" rows="1" placeholder="メッセージを入力..."
+                                disabled></textarea>
+                            <button id="chat-send" class="send-btn" disabled>↑</button>
+                        </div>
+                    </div>
+
+                    <!-- 右パネル: 進捗マップ（セッション開始後スライドイン） -->
+                    <aside class="right-panel" id="right-panel">
+                        <div class="rp-header">
+                            <span class="rp-title">📋 進捗マップ</span>
+                        </div>
+                        <div class="rp-scroll">
+                            <div class="progress-bar-wrap">
+                                <div class="progress-fill" id="progress-fill"></div>
+                            </div>
+                            <span class="progress-text" id="progress-text">0 / 5</span>
+
+                            <div id="aspect-list" class="aspect-list"></div>
+
+                            <!-- What (locked) -->
+                            <div class="rp-step locked hidden" id="step-what">
+                                <div class="rp-step-head"><span class="rp-badge">STEP 3</span> What 🔒</div>
+                                <div class="rp-step-body">
+                                    <div class="mini-field"><label>💡 価値</label><textarea class="mini-ta what-field"
+                                            data-key="value" rows="2" disabled placeholder="Why確定後"></textarea></div>
+                                    <div class="mini-field"><label>📐 スコープ</label><textarea class="mini-ta what-field"
+                                            data-key="scope" rows="2" disabled placeholder="Why確定後"></textarea></div>
+                                    <div class="mini-field"><label>📊 指標</label><textarea class="mini-ta what-field"
+                                            data-key="success" rows="2" disabled placeholder="Why確定後"></textarea></div>
+                                </div>
+                            </div>
+
+                            <!-- Approach (locked) -->
+                            <div class="rp-step locked hidden" id="step-approach">
+                                <div class="rp-step-head"><span class="rp-badge">STEP 4</span> 方針 🔒</div>
+                                <div class="rp-step-body">
+                                    <div id="approach-table-container" class="hidden"></div>
+                                    <div id="approach-selection" class="hidden">
+                                        <label>選定理由</label>
+                                        <textarea id="approach-reason" class="mini-ta" rows="3"
+                                            placeholder="なぜこの方針？"></textarea>
+                                        <div class="char-ct"><span id="approach-reason-count">0</span>/100</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- アクションボタン -->
+                        <div class="rp-actions">
+                            <button id="check-btn" class="primary-btn accent hidden">🔍 観点をチェック</button>
+                            <button id="submit-what-btn" class="primary-btn hidden">📤 Whatを壁打ち</button>
+                            <button id="brainstorm-btn" class="primary-btn hidden">💡 方針を洗い出す</button>
+                            <button id="finalize-btn" class="primary-btn success hidden">🎯 方針を確定</button>
+                        </div>
+                    </aside>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Preview Modal -->
+    <div class="modal-overlay hidden" id="preview-modal">
+        <div class="modal-card">
+            <div class="modal-head">
+                <h3>📄 要件定義書プレビュー</h3>
+                <button class="icon-btn modal-close" data-modal="preview-modal">✕</button>
+            </div>
+            <div class="modal-body" id="preview-content"></div>
+        </div>
+    </div>
+
+
+    <script src="ai_api.js?v=20260216f"></script>
+    <script src="app_v2.js?v=20260216f"></script>
+</body>
+
+</html>
