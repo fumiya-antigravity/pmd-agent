@@ -145,25 +145,42 @@ const AIApi = (() => {
         // ② AnalysisCrewが結果をパース・検証
         AnalysisCrew.parseResult(result);
 
-        // ③ ok判定が1つ以上 → 2回目バリデーション（AIセカンドオピニオン）
+        // ③ ok判定が1つ以上 OR FB品質違反あり → 2回目バリデーション（AIセカンドオピニオン）
         const okAspects = result.aspectUpdates
             ? Object.entries(result.aspectUpdates).filter(([, v]) => v.status === 'ok')
             : [];
+        const hasFBViolations = result._fbViolations && result._fbViolations.length > 0;
 
-        if (okAspects.length > 0) {
-            console.log('[Pipeline] ③ 2回目バリデーション: ok判定' + okAspects.length + '件を再評価');
+        if (okAspects.length > 0 || hasFBViolations) {
+            const triggerReason = hasFBViolations ? `FB品質違反${result._fbViolations.length}件` : `ok判定${okAspects.length}件`;
+            console.log('[Pipeline] ③ 2回目バリデーション: ' + triggerReason + 'を再評価');
             try {
                 const valPrompt = OrchestratorCrew.buildValidationPrompt();
+
+                // 違反情報をプロンプトに追加
+                let violationSection = '';
+                if (hasFBViolations) {
+                    violationSection = '\n\n## ⚠️ コードレベル品質違反（必ず修正せよ）\n';
+                    for (const av of result._fbViolations) {
+                        violationSection += `\n### ${av.aspect}:\n`;
+                        for (const v of av.violations) {
+                            violationSection += `- **${v.type}** [${v.field}]: ${v.detail}\n`;
+                        }
+                    }
+                    violationSection += '\n上記の違反がある観点は、修正後のreason/advice/exampleをrevisionsに含めよ。\n';
+                }
+
                 const valMessages = [
                     { role: 'system', content: valPrompt },
                     {
                         role: 'user', content: '## ユーザー原文\n## 概要\n' + overview + '\n\n## Why\n' + whyText
-                            + '\n\n## 1回目AIの判定結果\n' + JSON.stringify(result.aspectUpdates, null, 2)
+                            + '\n\n## 1回目AIの判定結果\n' + JSON.stringify(result.aspectUpdates, null, 2) + violationSection
                     },
                 ];
                 const valResult = await callAPI(valMessages, signal);
                 const usage2 = valResult._usage; delete valResult._usage;
-                addLog(2, 'OrchestratorCrew — AIセカンドオピニオン', valMessages, valResult, usage2);
+                const label = hasFBViolations ? 'OrchestratorCrew — FB品質補正' : 'OrchestratorCrew — AIセカンドオピニオン';
+                addLog(2, label, valMessages, valResult, usage2);
 
                 console.log('[Pipeline] 2回目バリデーション結果:', JSON.stringify(valResult));
                 OrchestratorCrew.applyValidation(result, valResult);

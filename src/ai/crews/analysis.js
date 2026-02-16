@@ -107,6 +107,7 @@ const AnalysisCrew = (() => {
             { pattern: 'を具体的に', fix: '「具体的に」ではなく具体的な文章そのものを書け' },
             { pattern: 'を挙げてみて', fix: '挙げるべき例そのものをAIが先に示せ' },
             { pattern: 'を思い出してみて', fix: '思い出す対象の具体例をAIが先に示せ' },
+            { pattern: 'を思い出して', fix: '思い出す対象の具体例をAIが先に示せ' },
         ];
         const exampleMatched = exampleProhibited.filter(p => example.includes(p.pattern));
         if (exampleMatched.length > 0) {
@@ -115,6 +116,27 @@ const AnalysisCrew = (() => {
                 detail: `指示文パターン: 「${exampleMatched.map(m => m.pattern).join('」「')}」→ ${exampleMatched.map(m => m.fix).join('; ')}`,
                 field: 'example'
             });
+        }
+
+        // ④ 分析不在reason: 分析ではなく作業宣言や関連性の言及だけで終わっている
+        if (reason) {
+            const noAnalysisPatterns = [
+                '追加します', '追加する', '関連しているため', '関連している',
+                '情報を追加', 'について追記', '具体性を高めるため'
+            ];
+            const analysisIndicators = [
+                '不足', '不明', '欠けて', '特定されて', '曖昧', '具体的に述べ',
+                '一方で', 'ただし', 'しかし', '層が', '描かれて', 'ため、status'
+            ];
+            const hasNoAnalysis = noAnalysisPatterns.some(p => reason.includes(p));
+            const hasAnalysis = analysisIndicators.some(p => reason.includes(p));
+            if (hasNoAnalysis && !hasAnalysis) {
+                violations.push({
+                    type: 'NO_ANALYSIS_REASON',
+                    detail: 'reasonが作業宣言（「追加します」「関連しているため」）に留まり、充足分析・不足分析が含まれていない。ユーザーの発言の何が充足し何が不足かを分析せよ',
+                    field: 'reason'
+                });
+            }
         }
 
         return violations;
@@ -158,6 +180,24 @@ const AnalysisCrew = (() => {
             if (v.length > 0) {
                 console.warn(`[AnalysisCrew] ${u.aspect}: FB品質違反 ${v.length}件: ${v.map(x => x.type).join(', ')}`);
                 allViolations.push({ aspect: u.aspect, violations: v });
+            }
+        }
+
+        // relatedUpdates（横展開）の検証 — 品質は横展開でも同じ基準で担保する
+        if (result.relatedUpdates && Array.isArray(result.relatedUpdates)) {
+            for (const ru of result.relatedUpdates) {
+                if (ru.action === 'skip') continue;
+                const ruAsUpdate = {
+                    status: ru.newStatus || 'thin',
+                    reason: ru.reason || '',
+                    advice: ru.advice || '',
+                    example: ru.example || '',
+                };
+                const v = validateFBQuality(ruAsUpdate);
+                if (v.length > 0) {
+                    console.warn(`[AnalysisCrew] relatedUpdate ${ru.aspect}: FB品質違反 ${v.length}件: ${v.map(x => x.type).join(', ')}`);
+                    allViolations.push({ aspect: `related:${ru.aspect}`, violations: v });
+                }
             }
         }
 
