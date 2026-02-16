@@ -48,9 +48,9 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        """静的ファイル配信（/ → index_v2.html にリダイレクト）"""
+        """静的ファイル配信（/ → public/index.html にリダイレクト）"""
         if self.path == '/' or self.path == '/index.html':
-            self.path = '/index_v2.html'
+            self.path = '/public/index.html'
         super().do_GET()
 
     def do_POST(self):
@@ -75,8 +75,8 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
             payload = json.dumps({
                 'model': MODEL,
                 'messages': messages,
-                'temperature': 0.7,
-                'max_tokens': 4000,
+                'temperature': 0.4,
+                'max_tokens': 3000,
                 'response_format': { 'type': 'json_object' },
             }).encode('utf-8')
 
@@ -90,25 +90,80 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
                 method='POST',
             )
 
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with urllib.request.urlopen(req, timeout=60) as resp:
                 result = json.loads(resp.read().decode('utf-8'))
                 reply = result['choices'][0]['message']['content']
-                # デバッグ: AIのレスポンス構造をログに出力
+                usage = result.get('usage', {})
+                # === 包括的デバッグログ ===
+                print(f'\n{"="*60}')
+                print(f'[AI Response] model={result.get("model", MODEL)}')
+                print(f'[AI Response] tokens: prompt={usage.get("prompt_tokens","?")}, completion={usage.get("completion_tokens","?")}, total={usage.get("total_tokens","?")}')
                 try:
                     parsed = json.loads(reply)
-                    has_related = 'relatedUpdates' in parsed
-                    related_count = len(parsed.get('relatedUpdates', []))
-                    related_aspects = [ru.get('aspect', '?') for ru in parsed.get('relatedUpdates', [])]
-                    print(f'[AI Response] relatedUpdates: {has_related}, count: {related_count}, aspects: {related_aspects}')
-                    if parsed.get('aspectUpdate'):
+                    
+                    # thinking
+                    thinking = parsed.get('thinking', '')
+                    print(f'[AI Response] thinking: {thinking[:200]}...' if len(thinking) > 200 else f'[AI Response] thinking: {thinking}')
+                    
+                    # aspectUpdates (PHASE_INITIAL)
+                    if 'aspectUpdates' in parsed:
+                        print(f'[AI Response] === aspectUpdates ===')
+                        for k, v in parsed['aspectUpdates'].items():
+                            status = v.get('status', '?')
+                            text_preview = (v.get('text', '') or '')[:60]
+                            reason_preview = (v.get('reason', '') or '')[:60]
+                            print(f'  {k}: status={status}')
+                            print(f'    text: {text_preview}')
+                            print(f'    reason: {reason_preview}')
+                    
+                    # aspectUpdate (PHASE_WHY)
+                    if 'aspectUpdate' in parsed:
                         au = parsed['aspectUpdate']
                         print(f'[AI Response] aspectUpdate: aspect={au.get("aspect")}, status={au.get("status")}')
-                except Exception:
-                    print(f'[AI Response] JSON parse failed, raw length: {len(reply)}')
+                        print(f'  text: {(au.get("text","") or "")[:80]}')
+                    
+                    # crossCheck
+                    cc = parsed.get('crossCheck', {})
+                    if cc:
+                        redundancy = cc.get('redundancy', {})
+                        logic = cc.get('logicChain', {})
+                        print(f'[AI Response] crossCheck:')
+                        print(f'  redundancy.detected={redundancy.get("detected", False)}')
+                        if redundancy.get('pairs'):
+                            for pair in redundancy['pairs']:
+                                print(f'  pair: {pair.get("a")} <-> {pair.get("b")}: {pair.get("explanation","")[:60]}')
+                        print(f'  logicChain.connected={logic.get("connected", True)}')
+                        if logic.get('gap'):
+                            print(f'  gap: {logic["gap"][:80]}')
+                    
+                    # contamination
+                    contam = parsed.get('contamination', {})
+                    if contam.get('detected'):
+                        print(f'[AI Response] contamination: {len(contam.get("items",[]))} items')
+                    
+                    # relatedUpdates
+                    ru = parsed.get('relatedUpdates', [])
+                    if ru:
+                        print(f'[AI Response] relatedUpdates: {len(ru)} items')
+                        for r in ru:
+                            print(f'  {r.get("aspect")}: action={r.get("action")}, score={r.get("relevanceScore")}, newStatus={r.get("newStatus")}')
+                    
+                    # message
+                    msg = parsed.get('message', '')
+                    print(f'[AI Response] message ({len(msg)} chars): {msg[:100]}...' if len(msg) > 100 else f'[AI Response] message: {msg}')
+                    
+                    # nextAspect
+                    print(f'[AI Response] nextAspect: {parsed.get("nextAspect", "null")}')
+                    print(f'{"="*60}\n')
+                    
+                except Exception as parse_err:
+                    print(f'[AI Response] JSON parse failed: {parse_err}')
+                    print(f'[AI Response] raw ({len(reply)} chars): {reply[:300]}')
+                
                 self._send_json(200, {
                     'reply': reply,
                     'model': result.get('model', MODEL),
-                    'usage': result.get('usage', {}),
+                    'usage': usage,
                 })
 
         except urllib.error.HTTPError as e:

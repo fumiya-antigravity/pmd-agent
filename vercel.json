@@ -6,7 +6,7 @@
     "rewrites": [
         {
             "source": "/",
-            "destination": "/index_v2.html"
+            "destination": "/public/index.html"
         },
         {
             "source": "/api/:path*",

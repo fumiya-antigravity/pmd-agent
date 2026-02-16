@@ -207,6 +207,35 @@ const SupabaseClient = (() => {
     }
 
     // ===================================================
+    // Aspect Snapshots CRUD（Vol履歴）
+    // ===================================================
+
+    async function saveSnapshot(sessionId, volNumber, messageId, snapshot) {
+        const { data, error } = await getClient()
+            .from('aspect_snapshots')
+            .upsert({
+                session_id: sessionId,
+                vol_number: volNumber,
+                message_id: messageId,
+                snapshot,
+            }, { onConflict: 'session_id,vol_number' })
+            .select()
+            .single();
+        if (error) { console.error('[saveSnapshot]', error); throw error; }
+        return data;
+    }
+
+    async function getSnapshots(sessionId) {
+        const { data, error } = await getClient()
+            .from('aspect_snapshots')
+            .select('*')
+            .eq('session_id', sessionId)
+            .order('vol_number', { ascending: true });
+        if (error) { console.error('[getSnapshots]', error); throw error; }
+        return data || [];
+    }
+
+    // ===================================================
     // Public API
     // ===================================================
     return {
@@ -227,5 +256,8 @@ const SupabaseClient = (() => {
         // Analysis Results
         saveAnalysisResult,
         getAnalysisResults,
+        // Aspect Snapshots
+        saveSnapshot,
+        getSnapshots,
     };
 })();

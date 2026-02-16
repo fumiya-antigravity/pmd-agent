@@ -1,7 +1,9 @@
-# 09: Git/GitHub ワークフロー
+---
+description: "Git/GitHubワークフロー。ブランチ戦略、コミットメッセージ規約、PR運用。"
+alwaysApply: true
+---
 
-> **アクティベーション**: 常にON
-> このルールはすべての開発作業に適用される。
+# 09: Git/GitHub ワークフロー
 
 ## リポジトリ情報
 
@@ -74,3 +76,8 @@ AIエージェント（Antigravity等）が開発を行う際:
 2. コミットメッセージはConventional Commitsに従う
 3. 大きな変更はブランチを切ってから作業する
 4. `git status`で未コミットの変更がないか定期確認する
+5. **【最終ステップ】コミット前に以下3ファイルの更新要否を必ずチェック**:
+   - `.agent/rules/01-project-overview.md` — 新機能やコンセプト変更の反映
+   - `.agent/rules/02-architecture.md` — 新Crew追加・パイプライン変更の反映
+   - `.agent/rules/03-directory-structure.md` — ファイル/ディレクトリの追加・移動・削除の反映
+
