@@ -41,7 +41,7 @@ const ContextBudget = (() => {
         // 分析Crew: フォーカス中の観点のフル情報 + 他観点のstatus概要
         let ctx = '\n## 観点状態\n';
         for (const [key, text] of Object.entries(aspects)) {
-            const st = aspectStatus?.[key] || (!text?.trim() ? 'empty' : text.trim().length < 30 ? 'thin' : 'ok');
+            const st = aspectStatus?.[key] || 'unknown';
             if (key === currentAspect) {
                 ctx += `### ${key} (★フォーカス中): ${st}\n現在のtext: 「${text?.trim() || ''}」\n`;
                 if (aspectReason?.[key]) ctx += `前回のreason: 「${aspectReason[key]}」\n`;
@@ -60,7 +60,7 @@ const ContextBudget = (() => {
         let ctx = '\n## 全観点の現在状態\n';
         ctx += `フォーカス中: ${currentAspect}\n\n`;
         for (const [key, text] of Object.entries(aspects)) {
-            const st = aspectStatus?.[key] || (!text?.trim() ? 'empty' : text.trim().length < 30 ? 'thin' : 'ok');
+            const st = aspectStatus?.[key] || 'unknown';
             ctx += `### ${key}: ${st}\n現在のtext: 「${text?.trim() || '（空）'}」\n`;
         }
         return ctx;
