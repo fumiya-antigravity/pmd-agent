@@ -67,18 +67,24 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
             body = json.loads(raw)
 
             messages = body.get('messages', [])
+            json_mode = body.get('jsonMode', True)
+            max_tokens = body.get('maxTokens', 3000)
             if not messages:
                 self._send_json(400, {'error': 'messages required'})
                 return
 
             # OpenAI API 呼び出し
-            payload = json.dumps({
+            openai_body = {
                 'model': MODEL,
                 'messages': messages,
                 'temperature': 0.4,
-                'max_tokens': 3000,
-                'response_format': { 'type': 'json_object' },
-            }).encode('utf-8')
+                'max_tokens': max_tokens,
+            }
+            # jsonMode=false の場合、response_formatを外す（Phase1自由テキスト用）
+            if json_mode not in (False, 'false', 0):
+                openai_body['response_format'] = { 'type': 'json_object' }
+            
+            payload = json.dumps(openai_body).encode('utf-8')
 
             req = urllib.request.Request(
                 OPENAI_URL,
