@@ -493,7 +493,7 @@
                         example: state.aspectExample[key] || '',
                     };
                 }
-                await dbSync.saveSnapshot(state.summaryVol, aiMsgRecord?.id || null, vol1Snapshot);
+                await dbSync.saveSnapshot(state.summaryVol, null, vol1Snapshot);
             }
             for (const key of Object.keys(ASPECT_META)) {
                 if (!state.aspects.hasOwnProperty(key)) state.aspects[key] = '';
@@ -501,49 +501,59 @@
             }
             updateProgress();
 
-            // AI message
+            // AI message（UI表示）
             if (result.message) {
                 addMsg('ai', result.message);
-                // 初回分析のメタデータも会話履歴に含める
-                let historyEntry = result.message;
-                if (result.aspectUpdates) {
-                    const summary = Object.entries(result.aspectUpdates)
-                        .map(([k, v]) => `${k}=${v.status}`)
-                        .join(', ');
-                    historyEntry += `\n[初回分析: ${summary}]`;
-                }
-                state.conversationHistory.push({ role: 'assistant', content: historyEntry });
+            }
 
-                // 🔹 [A1] AIメッセージをDB保存（初回分析）
-                const aiMsgRecord = await dbSync.saveMessage('assistant', historyEntry, {
-                    type: 'initial_analysis',
-                    aspectUpdates: result.aspectUpdates || {},
+            // 🔹 DB保存（result.messageの有無に関わらず必ず実行）
+            const aiHistoryEntry = result.message || '[初回分析完了]';
+            if (result.aspectUpdates) {
+                const summary = Object.entries(result.aspectUpdates)
+                    .map(([k, v]) => `${k}=${v.status}`)
+                    .join(', ');
+                state.conversationHistory.push({
+                    role: 'assistant',
+                    content: aiHistoryEntry + `\n[初回分析: ${summary}]`,
                 });
-                console.log(`🔬[startSession] aiMsgRecord: id=${aiMsgRecord?.id?.substring(0, 8) || 'NULL'}, saved=${!!aiMsgRecord}`);
+            } else {
+                state.conversationHistory.push({ role: 'assistant', content: aiHistoryEntry });
+            }
 
-                // 🔹 [A3] 分析結果をDB保存
-                const analysisResult = await dbSync.saveAnalysisResult(
-                    aiMsgRecord?.id || null,
-                    'initial_analysis',
-                    result
-                );
-                console.log(`🔬[startSession] analysisResult saved: messageId=${aiMsgRecord?.id?.substring(0, 8) || 'NULL'}`);
+            // 🔹 [A1] AIメッセージをDB保存（初回分析）— message有無に関わらず必ず実行
+            const aiMsgRecord = await dbSync.saveMessage('assistant', state.conversationHistory[state.conversationHistory.length - 1].content, {
+                type: 'initial_analysis',
+                aspectUpdates: result.aspectUpdates || {},
+            });
+            console.log(`🔬[startSession] aiMsgRecord: id=${aiMsgRecord?.id?.substring(0, 8) || 'NULL'}, saved=${!!aiMsgRecord}`);
 
-                // 🔹 [A2] 全観点のaspectStateをDB保存
-                if (result.aspectUpdates) {
-                    for (const [key, info] of Object.entries(result.aspectUpdates)) {
-                        await dbSync.saveAspectState(key, {
-                            status: info.status || 'empty',
-                            text_content: info.text || '',
-                            reason: info.reason || '',
-                            advice: info.advice || '',
-                            quoted: info.quoted || '',
-                            example: info.example || '',
-                            updated_by: 'initial_analysis',
-                        });
-                    }
-                    console.log('[startSession] 全観点DB保存完了');
+            // 🔹 [A3] 分析結果をDB保存
+            await dbSync.saveAnalysisResult(
+                aiMsgRecord?.id || null,
+                'initial_analysis',
+                result
+            );
+            console.log(`🔬[startSession] analysisResult saved: messageId=${aiMsgRecord?.id?.substring(0, 8) || 'NULL'}`);
+
+            // 🔹 [A2] 全観点のaspectStateをDB保存
+            if (result.aspectUpdates) {
+                for (const [key, info] of Object.entries(result.aspectUpdates)) {
+                    await dbSync.saveAspectState(key, {
+                        status: info.status || 'empty',
+                        text_content: info.text || '',
+                        reason: info.reason || '',
+                        advice: info.advice || '',
+                        quoted: info.quoted || '',
+                        example: info.example || '',
+                        updated_by: 'initial_analysis',
+                    });
                 }
+                console.log('🔬[startSession] 全観点DB保存完了');
+            }
+
+            // 🔹 Vol.1スナップショットのmessage_idを更新（aiMsgRecord作成後）
+            if (aiMsgRecord?.id && state.summaryVol > 0) {
+                console.log(`🔬[startSession] Vol.${state.summaryVol} snapshot messageId更新`);
             }
 
             // Next aspect
