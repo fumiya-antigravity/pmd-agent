@@ -60,9 +60,12 @@ const Pipeline = (() => {
             signal,
         });
         if (!resp.ok) {
-            const err = await resp.json().catch(() => ({ error: 'Unknown error' }));
-            console.error('[callAPI] HTTPエラー:', resp.status, err);
-            throw new Error(err.detail || err.error || `HTTP ${resp.status}`);
+            const errorText = await resp.text().catch(() => '(レスポンス読取失敗)');
+            console.error(`[callAPI] HTTPエラー: status=${resp.status}, body=${errorText.substring(0, 500)}`);
+            let errObj;
+            try { errObj = JSON.parse(errorText); } catch { errObj = null; }
+            const message = errObj?.detail || errObj?.error || `HTTP ${resp.status}: ${errorText.substring(0, 200)}`;
+            throw new Error(message);
         }
         const data = await resp.json();
         const reply = data.reply;
