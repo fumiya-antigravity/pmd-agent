@@ -77,7 +77,7 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
             openai_body = {
                 'model': MODEL,
                 'messages': messages,
-                'temperature': 0.4,
+                'temperature': 0.7,
                 'max_tokens': max_tokens,
             }
             # jsonMode=false の場合、response_formatを外す（Phase1自由テキスト用）

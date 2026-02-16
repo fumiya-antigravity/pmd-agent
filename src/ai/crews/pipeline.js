@@ -112,7 +112,7 @@ const Pipeline = (() => {
 下記の5観点テキストを俯瞰し、status再評価と所見を返せ。
 {
   "overview": {"overallStatus": "ready|needs_work", "summary": "全体所見"},
-  "aspects": {"<key>": {"currentStatus": "ok|thin|empty", "revisedStatus": "ok|thin|empty", "comment": "改善点"}},
+  "aspectResults": {"<key>": {"status": "ok|thin|empty", "feedback": "改善点"}},
   "suggestedAspects": [{"key": "英語キー", "label": "日本語名", "emoji": "絵文字", "reason": "提案理由"}],
   "allApproved": true|false,
   "message": "総合フィードバック（400文字以内）"
@@ -208,6 +208,7 @@ const Pipeline = (() => {
         clearProcessLog();
 
         const sessionId = context?.sessionId;
+        const conversationHistory = context?.conversationHistory || [];
 
         // --- Layer読込 ---
         const personality = await loadPersonality();
@@ -289,7 +290,7 @@ const Pipeline = (() => {
         // === Phase 3: 最終構造化 ===
         console.log('[Pipeline v4] Phase3: 最終構造化');
         const phase3Result = await runPhase3(
-            phase0Result, synthesisResult, userMessage, layer3, signal
+            phase0Result, synthesisResult, userMessage, layer3, signal, conversationHistory
         );
 
         const finalResult = buildFinalResult(phase0Result, synthesisResult, phase3Result);
@@ -339,7 +340,7 @@ const Pipeline = (() => {
     // ===================================================
     // Phase3: 最終構造化
     // ===================================================
-    async function runPhase3(phase0Result, synthesisResult, userMessage, layer3, signal) {
+    async function runPhase3(phase0Result, synthesisResult, userMessage, layer3, signal, conversationHistory) {
         // Phase2の統合結果を元に、5観点の構造化FBを生成
         const aspectSummary = Object.entries(synthesisResult.aspectData)
             .map(([key, data]) => {
@@ -348,22 +349,31 @@ const Pipeline = (() => {
 元タスク: ${data.sources.join(', ')}`;
             }).join('\n\n');
 
+        // 会話履歴セクション（あれば）
+        let conversationSection = '';
+        if (conversationHistory && conversationHistory.length > 0) {
+            const recentHistory = conversationHistory.slice(-6).map(h =>
+                `[${h.role}] ${(h.content || '').substring(0, 200)}`
+            ).join('\n');
+            conversationSection = `
+## 直近の会話履歴
+${recentHistory}
+`;
+        }
+
         const phase3Prompt = `## プロダクト方向性
 ${layer3}
 
 ## タスク: 最終構造化
 
 以下の分析素材を基に、ユーザーへのフィードバックを構造化せよ。
-**分析は完了済み。あなたの仕事は素材を整形し、わかりやすく伝えること。**
+**分析は完了済。あなたの仕事は素材を整形し、わかりやすく伝えること。**
 
 ## Goal
 ${phase0Result.goal}
-
+${conversationSection}
 ## 分析素材（Phase2統合結果）
 ${aspectSummary}
-
-## ユーザーの原文
-${userMessage}
 
 ## JSON出力
 {
