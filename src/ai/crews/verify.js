@@ -16,12 +16,26 @@ const VerifyCrew = (() => {
 
     /**
      * 検証用API呼出しメッセージ配列を構築
-     * thin判定時のみ呼ぶ
+     * thin判定時 または FB品質違反時に呼ぶ
      */
-    function buildMessages(analysisResult, userMessage) {
-        if (analysisResult.aspectUpdate?.status !== 'thin') return null;
+    function buildMessages(analysisResult, userMessage, forceTrigger = false) {
+        const isThin = analysisResult.aspectUpdate?.status === 'thin';
+        if (!isThin && !forceTrigger) return null;
 
-        const verifyUser = `## 前回の分析結果(R1)\n${JSON.stringify(analysisResult.aspectUpdate)}\n\n## ユーザーの原文\n${userMessage}`;
+        // 違反情報をプロンプトに注入
+        let violationSection = '';
+        if (analysisResult._fbViolations && analysisResult._fbViolations.length > 0) {
+            violationSection = '\n\n## ⚠️ コードレベル品質違反が検出されました（必ず修正せよ）\n';
+            for (const av of analysisResult._fbViolations) {
+                violationSection += `\n### ${av.aspect}:\n`;
+                for (const v of av.violations) {
+                    violationSection += `- **${v.type}** [${v.field}]: ${v.detail}\n`;
+                }
+            }
+            violationSection += '\n**上記の違反を全て修正したrevisedUpdateを返すこと。shouldRevise=trueにせよ。**\n';
+        }
+
+        const verifyUser = `## 前回の分析結果(R1)\n${JSON.stringify(analysisResult.aspectUpdate || analysisResult.aspectUpdates)}\n\n## ユーザーの原文\n${userMessage}${violationSection}`;
         return [
             { role: 'system', content: buildPrompt() },
             { role: 'user', content: verifyUser },
@@ -42,6 +56,7 @@ const VerifyCrew = (() => {
             if (verifyResult.revisedUpdate.text) r.aspectUpdate.text = verifyResult.revisedUpdate.text;
             if (verifyResult.revisedUpdate.reason) r.aspectUpdate.reason = verifyResult.revisedUpdate.reason;
             if (verifyResult.revisedUpdate.advice) r.aspectUpdate.advice = verifyResult.revisedUpdate.advice;
+            if (verifyResult.revisedUpdate.example) r.aspectUpdate.example = verifyResult.revisedUpdate.example;
             r.thinking = (r.thinking || '') + '\n[検証結果] ' + (verifyResult.verification || '');
             return r;
         }

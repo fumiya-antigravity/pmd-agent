@@ -207,15 +207,17 @@ const AIApi = (() => {
         // ② AnalysisCrewが結果をパース
         AnalysisCrew.parseResult(result);
 
-        // ③ VerifyCrew: thin判定時のみ検証（API 2回目）
-        const verifyMessages = VerifyCrew.buildMessages(result, userMessage);
+        // ③ VerifyCrew: thin判定時 または FB品質違反時に検証（API 2回目）
+        const hasFBViolations = result._fbViolations && result._fbViolations.length > 0;
+        const verifyMessages = VerifyCrew.buildMessages(result, userMessage, hasFBViolations);
         if (verifyMessages) {
             try {
                 const verifyResult = await callAPI(verifyMessages, signal);
                 const usage2 = verifyResult._usage; delete verifyResult._usage;
-                addLog(2, 'VerifyCrew — thin検証', verifyMessages, verifyResult, usage2);
+                const label = hasFBViolations ? 'VerifyCrew — FB品質補正' : 'VerifyCrew — thin検証';
+                addLog(2, label, verifyMessages, verifyResult, usage2);
                 VerifyCrew.merge(result, verifyResult);
-                console.log('[Pipeline] ③ VerifyCrew完了（API 2回目）');
+                console.log(`[Pipeline] ③ ${label}完了（API 2回目）`);
             } catch (e) {
                 console.warn('[Pipeline] VerifyCrew失敗、スキップ:', e.message);
             }

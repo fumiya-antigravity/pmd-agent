@@ -53,10 +53,79 @@ const AnalysisCrew = (() => {
     }
 
     /**
+     * FB品質のコードレベル検証
+     * プロンプトだけでは制御できない品質問題をコード側で検出する
+     */
+    function validateFBQuality(update) {
+        const violations = [];
+        if (!update) return violations;
+
+        const status = update.status;
+        const reason = update.reason || '';
+        const advice = update.advice || '';
+        const example = update.example || '';
+
+        // ① reason自己矛盾: 肯定語でthin判定しているのに不足分析がない
+        if (status === 'thin') {
+            const positiveWords = ['示された', '明確になった', '具体的に説明', '判明した', '追加された',
+                '浮き彫りになった', '明らかになった', '情報が追加', '具体的に述べ', '具体性が加わ'];
+            const deficitWords = ['不足', '不明', '欠けて', '特定されていない', '曖昧', 'まだ',
+                '足りて', '描かれていない', '示されていない', '不十分'];
+            const hasPositive = positiveWords.some(p => reason.includes(p));
+            const hasDeficit = deficitWords.some(p => reason.includes(p));
+            if (hasPositive && !hasDeficit) {
+                violations.push({
+                    type: 'SELF_CONTRADICTION',
+                    detail: `reasonに肯定的評価（${positiveWords.filter(p => reason.includes(p)).join('、')}）があるがthin判定。不足点が具体的に指摘されていない。充足分析の後に「一方で〜が不足」と明記せよ`,
+                    field: 'reason'
+                });
+            }
+        }
+
+        // ② advice禁止パターン
+        const adviceProhibited = [
+            { pattern: '考えてみてください', fix: '具体的な問いかけや選択肢で思考を誘発せよ' },
+            { pattern: '振り返ってみてください', fix: '何をどの観点で振り返るか具体化せよ' },
+            { pattern: 'ことが重要です', fix: '重要性の指摘ではなく具体的アクションを示せ' },
+            { pattern: 'について考えて', fix: '何をどう考えるか、問いかけの形で示せ' },
+            { pattern: '具体的な事例を挙げて', fix: 'AI自身がたたき台例を先に提示し、ユーザーに置き換えを促せ' },
+        ];
+        const adviceMatched = adviceProhibited.filter(p => advice.includes(p.pattern));
+        if (adviceMatched.length > 0) {
+            violations.push({
+                type: 'GENERIC_ADVICE',
+                detail: `禁止パターン: 「${adviceMatched.map(m => m.pattern).join('」「')}」→ ${adviceMatched.map(m => m.fix).join('; ')}`,
+                field: 'advice'
+            });
+        }
+
+        // ③ example指示文パターン（記述例でなく指示になっている）
+        const exampleProhibited = [
+            { pattern: 'を明記する', fix: '明記すべき内容そのものを書け' },
+            { pattern: 'が考えられます', fix: '推測ではなく具体的な記述例を提示せよ' },
+            { pattern: 'を考えてみて', fix: '考えさせるのではなくたたき台の文章を先に提示せよ' },
+            { pattern: 'を具体的に', fix: '「具体的に」ではなく具体的な文章そのものを書け' },
+            { pattern: 'を挙げてみて', fix: '挙げるべき例そのものをAIが先に示せ' },
+            { pattern: 'を思い出してみて', fix: '思い出す対象の具体例をAIが先に示せ' },
+        ];
+        const exampleMatched = exampleProhibited.filter(p => example.includes(p.pattern));
+        if (exampleMatched.length > 0) {
+            violations.push({
+                type: 'DIRECTIVE_EXAMPLE',
+                detail: `指示文パターン: 「${exampleMatched.map(m => m.pattern).join('」「')}」→ ${exampleMatched.map(m => m.fix).join('; ')}`,
+                field: 'example'
+            });
+        }
+
+        return violations;
+    }
+
+    /**
      * API応答から分析結果をパース・検証
      */
     function parseResult(result) {
         console.log('[AnalysisCrew] 結果パース');
+        let allViolations = [];
 
         // aspectUpdates (初回) の検証
         if (result.aspectUpdates) {
@@ -69,6 +138,12 @@ const AnalysisCrew = (() => {
                 if (!val.quoted || val.quoted.length < 5) {
                     console.warn('[AnalysisCrew] ' + key + ': quoted不足');
                 }
+                // FB品質検証
+                const v = validateFBQuality(val);
+                if (v.length > 0) {
+                    console.warn(`[AnalysisCrew] ${key}: FB品質違反 ${v.length}件: ${v.map(x => x.type).join(', ')}`);
+                    allViolations.push({ aspect: key, violations: v });
+                }
             }
         }
 
@@ -78,6 +153,18 @@ const AnalysisCrew = (() => {
             console.log('[AnalysisCrew] セッション分析: ' + u.aspect + '=' + u.status);
             if (!u.reason) console.warn('[AnalysisCrew] reason未設定');
             if (!u.advice) console.warn('[AnalysisCrew] advice未設定');
+            // FB品質検証
+            const v = validateFBQuality(u);
+            if (v.length > 0) {
+                console.warn(`[AnalysisCrew] ${u.aspect}: FB品質違反 ${v.length}件: ${v.map(x => x.type).join(', ')}`);
+                allViolations.push({ aspect: u.aspect, violations: v });
+            }
+        }
+
+        // 違反を結果に付与（pipeline.jsで活用）
+        if (allViolations.length > 0) {
+            result._fbViolations = allViolations;
+            console.warn(`[AnalysisCrew] FB品質違反合計: ${allViolations.reduce((s, a) => s + a.violations.length, 0)}件`);
         }
 
         return result;
