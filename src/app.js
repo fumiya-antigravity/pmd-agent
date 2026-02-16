@@ -1340,7 +1340,7 @@
         let html = '';
         for (const log of processLog) {
             html += `<div style="margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:8px">`;
-            html += `<div style="font-weight:600;margin-bottom:4px">Step ${log.step}: ${esc(log.label)} <span style="color:var(--sub);font-weight:400">${log.timestamp}</span></div>`;
+            html += `<div style="font-weight:600;margin-bottom:4px">Step ${log.step}: ${esc(log.label)} <span style="color:var(--sub);font-weight:400">${log.timestamp || ''}</span></div>`;
 
             // トークン使用量
             if (log.usage && (log.usage.prompt_tokens || log.usage.completion_tokens)) {
@@ -1348,25 +1348,30 @@
             }
 
             // リクエスト
-            html += `<details style="margin:4px 0"><summary style="cursor:pointer;color:var(--accent);font-size:0.9em">📤 リクエスト（メッセージ ${log.request.messageCount}件）</summary>`;
+            const req = log.request || {};
+            html += `<details style="margin:4px 0"><summary style="cursor:pointer;color:var(--accent);font-size:0.9em">📤 リクエスト（メッセージ ${req.messageCount || '?'}件）</summary>`;
             html += `<div style="font-size:0.8em;background:var(--card);padding:8px;border-radius:6px;margin-top:4px;max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">`;
-            if (log.request.systemPrompt) {
-                html += `<div style="color:var(--sub);margin-bottom:4px">--- system prompt (${log.request.systemPrompt.length}文字) ---</div>`;
-                html += esc(log.request.systemPrompt.length > 2000 ? log.request.systemPrompt.substring(0, 2000) + '\n...（省略）' : log.request.systemPrompt);
+            if (req.systemPrompt) {
+                html += `<div style="color:var(--sub);margin-bottom:4px">--- system prompt (${req.systemPrompt.length}文字) ---</div>`;
+                html += esc(req.systemPrompt.length > 2000 ? req.systemPrompt.substring(0, 2000) + '\n...（省略）' : req.systemPrompt);
             }
-            if (log.request.historyCount > 0) {
-                html += `<div style="color:var(--sub);margin:4px 0">--- 会話履歴 ${log.request.historyCount}件 ---</div>`;
+            if (req.historyCount > 0) {
+                html += `<div style="color:var(--sub);margin:4px 0">--- 会話履歴 ${req.historyCount}件 ---</div>`;
             }
-            if (log.request.userMessage) {
+            if (req.userMessage) {
                 html += `<div style="color:var(--sub);margin:4px 0">--- user message ---</div>`;
-                html += esc(log.request.userMessage);
+                html += esc(req.userMessage);
             }
             html += `</div></details>`;
 
             // レスポンス
             html += `<details style="margin:4px 0"><summary style="cursor:pointer;color:var(--accent);font-size:0.9em">📥 レスポンス</summary>`;
             html += `<div style="font-size:0.8em;background:var(--card);padding:8px;border-radius:6px;margin-top:4px;max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">`;
-            html += esc(JSON.stringify(log.response, null, 2));
+            try {
+                html += esc(JSON.stringify(log.response || {}, null, 2));
+            } catch (e) {
+                html += esc('[シリアライズ不可]');
+            }
             html += `</div></details>`;
 
             html += `</div>`;

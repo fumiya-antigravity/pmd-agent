@@ -28,10 +28,21 @@ const Pipeline = (() => {
     function addLog(step, label, messages, response, usage) {
         const systemContent = (messages.find(m => m.role === 'system')?.content || '');
         const userContent = (messages.find(m => m.role === 'user')?.content || '');
+        const historyMessages = messages.filter(m => m.role !== 'system' && m.role !== 'user');
 
         _processLog.push({
             step,
             label,
+            // app.js addProcessLogBlock互換
+            request: {
+                messageCount: messages.length,
+                systemPrompt: systemContent,
+                userMessage: userContent,
+                historyCount: historyMessages.length,
+            },
+            response: response || {},
+            usage: usage || {},
+            // 追加メタ情報
             inputTokens: usage?.prompt_tokens || 0,
             outputTokens: usage?.completion_tokens || 0,
             totalTokens: usage?.total_tokens || 0,
