@@ -16,7 +16,7 @@
 const Pipeline = (() => {
     'use strict';
 
-    const API_URL = 'http://localhost:8888/api/chat';
+    const API_URL = '/api/chat';
 
     // ===================================================
     // プロセスログ管理
@@ -47,12 +47,16 @@ const Pipeline = (() => {
     // ===================================================
     // API呼出し（共通基盤）— v3から転用、レスポンスパース含む
     // ===================================================
-    async function callAPI(messages, signal) {
-        console.log('[callAPI] リクエスト送信: messages=', messages.length, '件');
+    async function callAPI(messages, signal, options = {}) {
+        console.log('[callAPI] リクエスト送信: messages=', messages.length, '件, jsonMode=', options.jsonMode !== false);
         const resp = await fetch(API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ messages }),
+            body: JSON.stringify({
+                messages,
+                jsonMode: options.jsonMode !== false,
+                maxTokens: options.maxTokens || 4000,
+            }),
             signal,
         });
         if (!resp.ok) {
@@ -63,6 +67,12 @@ const Pipeline = (() => {
         const data = await resp.json();
         const reply = data.reply;
         console.log('[callAPI] token使用量:', JSON.stringify(data.usage || {}));
+
+        // jsonMode=false の場合、テキストとして返す
+        if (options.jsonMode === false) {
+            const text = typeof reply === 'object' ? JSON.stringify(reply) : (reply || '');
+            return { _text: text, _usage: data.usage || {} };
+        }
 
         let parsed;
         if (typeof reply === 'object' && reply !== null) {
@@ -76,7 +86,6 @@ const Pipeline = (() => {
                     try { parsed = JSON.parse(match[0]); } catch { /* fall through */ }
                 }
                 if (!parsed) {
-                    // Phase1は自由テキストなのでJSONパース失敗は正常
                     console.log('[callAPI] テキストレスポンスとして処理');
                     return { _text: reply, _usage: data.usage || {} };
                 }
@@ -299,18 +308,21 @@ const Pipeline = (() => {
         const results = await Promise.allSettled(
             prompts.map(async (p, i) => {
                 try {
-                    const raw = await callAPI(p.messages, signal);
-                    const usage = raw._usage; delete raw._usage;
+                    // Phase1は自由テキストなのでjsonMode=false
+                    const raw = await callAPI(p.messages, signal, { jsonMode: false, maxTokens: 2000 });
+                    const usage = raw._usage || {}; delete raw._usage;
+                    // responseは必ず文字列にする
+                    const responseText = raw._text || (typeof raw === 'string' ? raw : JSON.stringify(raw));
                     addLog(
                         10 + i,
                         `Phase1 — ${p.name}`,
-                        p.messages, raw, usage
+                        p.messages, { summary: responseText.substring(0, 200) }, usage
                     );
                     return {
                         type: p.type,
                         id: p.id,
                         name: p.name,
-                        response: raw._text || raw,
+                        response: responseText,
                     };
                 } catch (e) {
                     console.warn(`[Phase1] ${p.name}失敗:`, e.message);
@@ -371,6 +383,7 @@ ${userMessage}
 
         const messages = [
             { role: 'system', content: phase3Prompt },
+            { role: 'user', content: userMessage },
         ];
 
         const result = await callAPI(messages, signal);
@@ -389,7 +402,10 @@ ${userMessage}
             aspectUpdates: phase3Result.aspectUpdates || {},
             message: phase3Result.message || '',
             nextAspect: phase3Result.nextAspect || null,
-            thinking: `Goal: ${phase0Result.goal}`,
+            thinking: phase3Result.thinking || `Goal: ${phase0Result.goal}\nタスク: ${(phase0Result.tasks || []).map(t => t.name).join(', ')}`,
+            // レガシーUI互換: これらがないとapp.jsでエラー
+            contamination: { detected: false, items: [] },
+            crossCheck: { redundancy: { detected: false, pairs: [] }, logicChain: { connected: true } },
             // v4追加情報
             _v4: {
                 goal: phase0Result.goal,

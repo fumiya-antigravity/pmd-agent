@@ -18,7 +18,7 @@ export default async function handler(req) {
 
     try {
         const body = await req.json();
-        const { messages } = body;
+        const { messages, jsonMode = true, maxTokens } = body;
 
         if (!messages?.length) {
             return jsonResponse(400, { error: 'messages required' });
@@ -39,8 +39,8 @@ export default async function handler(req) {
                 model: 'gpt-4o-mini',
                 messages,
                 temperature: 0.7,
-                max_tokens: 4000,
-                response_format: { type: 'json_object' },
+                max_tokens: maxTokens || 4000,
+                ...(jsonMode !== false ? { response_format: { type: 'json_object' } } : {}),
             }),
         });
 

@@ -220,6 +220,16 @@ const SynthesisCrew = (() => {
             return null;
         }
 
+        // metaAnalysisは必ず文字列にする（オブジェクトの場合がある）
+        const metaText = typeof metaAnalysis === 'string'
+            ? metaAnalysis
+            : JSON.stringify(metaAnalysis);
+
+        if (!metaText || metaText.trim().length === 0) {
+            console.log('[SynthesisCrew] メタタスクテキスト空、スキップ');
+            return null;
+        }
+
         const existing = existingContext || {};
         const updates = {};
 
@@ -227,10 +237,10 @@ const SynthesisCrew = (() => {
         const existingRaw = existing.raw_personality || '';
         if (!existingRaw.trim()) {
             // 初回: メタタスクの結果をそのまま使う（ただし長さ制限）
-            updates.raw_personality = truncateText(metaAnalysis, 1500);
+            updates.raw_personality = truncateText(metaText, 1500);
         } else {
             // 2回目以降: 既存テキスト + 今回の新情報を追記
-            const newInsight = extractNewInsights(metaAnalysis, existingRaw);
+            const newInsight = extractNewInsights(metaText, existingRaw);
             if (newInsight) {
                 updates.raw_personality = truncateText(
                     existingRaw + '\n\n[' + new Date().toISOString().split('T')[0] + ' 更新]\n' + newInsight,
@@ -241,7 +251,7 @@ const SynthesisCrew = (() => {
 
         // 2. thinking_patterns の更新
         const patterns = existing.thinking_patterns || {};
-        const entryPointMatch = metaAnalysis.match(/(?:思考の入口|How|Why|What)[\s\S]{0,200}/i);
+        const entryPointMatch = metaText.match(/(?:思考の入口|How|Why|What)[\s\S]{0,200}/i);
         if (entryPointMatch) {
             const newEntry = extractPatternFromText(entryPointMatch[0]);
             if (newEntry && (!patterns.entry_point || newEntry !== patterns.entry_point)) {
@@ -249,7 +259,7 @@ const SynthesisCrew = (() => {
             }
         }
 
-        const effectiveMatch = metaAnalysis.match(/(?:効果的|響き|有効)[\s\S]{0,200}/i);
+        const effectiveMatch = metaText.match(/(?:効果的|響き|有効)[\s\S]{0,200}/i);
         if (effectiveMatch) {
             const approach = extractPatternFromText(effectiveMatch[0]);
             if (approach) patterns.effective_approach = approach;
@@ -261,7 +271,7 @@ const SynthesisCrew = (() => {
 
         // 3. recurring_concerns の更新
         const concerns = existing.recurring_concerns || [];
-        const concernPatterns = metaAnalysis.match(/(?:繰り返し|繰返し|パターン|傾向)[\s\S]{0,200}/i);
+        const concernPatterns = metaText.match(/(?:繰り返し|繰返し|パターン|傾向)[\s\S]{0,200}/i);
         if (concernPatterns) {
             const newConcern = extractPatternFromText(concernPatterns[0]);
             if (newConcern && !concerns.some(c => c.theme === newConcern)) {
@@ -276,7 +286,7 @@ const SynthesisCrew = (() => {
 
         // 4. growth_log: 変化の検出
         const growthLog = existing.growth_log || [];
-        const changeMatch = metaAnalysis.match(/(?:変化|成長|改善|できるようになった|進歩)[\s\S]{0,200}/i);
+        const changeMatch = metaText.match(/(?:変化|成長|改善|できるようになった|進歩)[\s\S]{0,200}/i);
         if (changeMatch) {
             const observation = extractPatternFromText(changeMatch[0]);
             if (observation) {

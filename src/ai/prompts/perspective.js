@@ -51,13 +51,11 @@ ${progressSummary ? `## これまでの進捗\n${progressSummary}\n` : ''}
 - このタスクの完了条件を満たすために必要な情報を、ユーザーの入力から最大限に抽出せよ
 - ユーザーが明示していない暗黙の前提も推論し、テキストとして出力せよ
 - 足りない情報がある場合は「何が不足しているか」「どういう情報があれば完了するか」を具体的に述べよ
-- 出力は**JSON不要**。自由テキストで、思考の過程も含めて大量に返せ
-
-## ユーザーの入力
-${userMessage}`;
+- 出力は**JSON不要**。自由テキストで、思考の過程も含めて大量に返せ`;
 
         return [
             { role: 'system', content: prompt },
+            { role: 'user', content: userMessage },
         ];
     }
 
@@ -125,13 +123,11 @@ ${existingSection}
 - 前回までの特徴と比較して、成長が見られる点はあるか
 - 変わっていない点、繰り返し出てくるパターンはあるか
 
-※ 推測で構わない。ただし必ず根拠を引用すること。
-
-## ユーザーの入力
-${userMessage}`;
+※ 推測で構わない。ただし必ず根拠を引用すること。`;
 
         return [
             { role: 'system', content: prompt },
+            { role: 'user', content: userMessage },
         ];
     }
 
