@@ -660,7 +660,7 @@
                         example: state.aspectExample[key] || '',
                     };
                 }
-                await dbSync.saveSnapshot(state.summaryVol, aiMsgRecord?.id || null, volSnapshot);
+                await dbSync.saveSnapshot(state.summaryVol, null, volSnapshot);
             }
 
             // Related aspect updates (関連観点の連動更新)
@@ -708,65 +708,66 @@
                 addThinkingBlock('⚠️ コンタミ検知', html);
             }
 
-            // AI message
+            // AI message（UI表示）
             if (result.message) {
                 addMsg('ai', result.message);
-                // 会話履歴にはmessageだけでなく、分析結果のサマリーも含める
-                // これによりAIが次のターンで「前回何を分析・更新したか」を把握できる
-                let historyEntry = result.message;
-                if (update) {
-                    historyEntry += `\n[分析結果: ${update.aspect}=${update.status}, text要約="${(update.text || '').substring(0, 100)}"]`;
-                }
-                if (result.relatedUpdates?.length) {
-                    historyEntry += `\n[関連更新: ${result.relatedUpdates.map(ru => `${ru.aspect}=${ru.newStatus}`).join(', ')}]`;
-                }
-                state.conversationHistory.push({ role: 'assistant', content: historyEntry });
+            }
 
-                // 🔹 AIメッセージをDB保存
-                const aiMsgRecord = await dbSync.saveMessage('assistant', historyEntry, {
-                    aspectUpdate: update || null,
-                    relatedUpdates: result.relatedUpdates || [],
+            // 🔹 DB保存（result.messageの有無に関わらず必ず実行）— 05ルール§6準拠
+            const aiHistoryEntry = result.message || '[分析完了]';
+            let historyEntry = aiHistoryEntry;
+            if (update) {
+                historyEntry += `\n[分析結果: ${update.aspect}=${update.status}, text要約="${(update.text || '').substring(0, 100)}"]`;
+            }
+            if (result.relatedUpdates?.length) {
+                historyEntry += `\n[関連更新: ${result.relatedUpdates.map(ru => `${ru.aspect}=${ru.newStatus}`).join(', ')}]`;
+            }
+            state.conversationHistory.push({ role: 'assistant', content: historyEntry });
+
+            // 🔹 AIメッセージをDB保存
+            const aiMsgRecord = await dbSync.saveMessage('assistant', historyEntry, {
+                aspectUpdate: update || null,
+                relatedUpdates: result.relatedUpdates || [],
+            });
+            console.log(`🔬[actualSend] aiMsgRecord: id=${aiMsgRecord?.id?.substring(0, 8) || 'NULL'}, saved=${!!aiMsgRecord}`);
+
+            // 🔹 分析結果をDB保存
+            await dbSync.saveAnalysisResult(
+                aiMsgRecord?.id || null,
+                state.deepDiveMode ? 'deep_dive' : 'why_session',
+                result
+            );
+            console.log(`🔬[actualSend] analysisResult saved: messageId=${aiMsgRecord?.id?.substring(0, 8) || 'NULL'}`);
+
+            // 🔹 観点状態をDB保存
+            if (update?.aspect) {
+                await dbSync.saveAspectState(update.aspect, {
+                    status: update.status || 'thin',
+                    text_content: update.text || '',
+                    reason: update.reason || '',
+                    advice: update.advice || '',
+                    quoted: update.quoted || '',
+                    example: update.example || '',
+                    updated_by: 'ai_direct',
                 });
-                console.log(`🔬[actualSend] aiMsgRecord: id=${aiMsgRecord?.id?.substring(0, 8) || 'NULL'}, saved=${!!aiMsgRecord}`);
-
-                // 🔹 分析結果をDB保存
-                await dbSync.saveAnalysisResult(
-                    aiMsgRecord?.id || null,
-                    state.deepDiveMode ? 'deep_dive' : 'why_session',
-                    result
-                );
-                console.log(`🔬[actualSend] analysisResult saved: messageId=${aiMsgRecord?.id?.substring(0, 8) || 'NULL'}`);
-
-                // 🔹 観点状態をDB保存
-                if (update?.aspect) {
-                    await dbSync.saveAspectState(update.aspect, {
-                        status: update.status || 'thin',
-                        text_content: update.text || '',
-                        reason: update.reason || '',
-                        advice: update.advice || '',
-                        quoted: update.quoted || '',
-                        example: update.example || '',
-                        updated_by: 'ai_direct',
-                    });
-                }
-                // 🔹 relatedUpdatesの観点もDB保存
-                if (result.relatedUpdates?.length) {
-                    for (const ru of result.relatedUpdates) {
-                        if (ru.aspect && ru.action !== 'skip' && ru.newText?.trim()) {
-                            await dbSync.saveAspectState(ru.aspect, {
-                                status: ru.newStatus || 'thin',
-                                text_content: ru.newText || '',
-                                reason: ru.reason || '',
-                                advice: ru.advice || '',
-                                quoted: ru.quoted || '',
-                                example: ru.example || '',
-                                updated_by: 'ai_related',
-                            });
-                        }
+            }
+            // 🔹 relatedUpdatesの観点もDB保存
+            if (result.relatedUpdates?.length) {
+                for (const ru of result.relatedUpdates) {
+                    if (ru.aspect && ru.action !== 'skip' && ru.newText?.trim()) {
+                        await dbSync.saveAspectState(ru.aspect, {
+                            status: ru.newStatus || 'thin',
+                            text_content: ru.newText || '',
+                            reason: ru.reason || '',
+                            advice: ru.advice || '',
+                            quoted: ru.quoted || '',
+                            example: ru.example || '',
+                            updated_by: 'ai_related',
+                        });
                     }
                 }
-                console.log('[actualSend] 全DB保存完了');
             }
+            console.log('🔬[actualSend] 全DB保存完了');
 
             // Next aspect — Flows層の決定論的遷移制御
             // AIのnextAspect指示が優先だが、OK後のフォールバックをFlows層が保証する
