@@ -24,6 +24,14 @@ const AIApi = (() => {
     function getProcessLog() { return _processLog; }
 
     function addLog(step, label, messages, response, usage) {
+        // 循環参照防止: responseから内部プロパティ(_processLog, _usage)を除外してコピー
+        let safeResponse = {};
+        try {
+            const { _processLog: _pl, _usage: _u, ...rest } = response || {};
+            safeResponse = JSON.parse(JSON.stringify(rest));
+        } catch (e) {
+            safeResponse = { _error: 'シリアライズ失敗: ' + e.message };
+        }
         _processLog.push({
             step,
             label,
@@ -34,7 +42,7 @@ const AIApi = (() => {
                 userMessage: messages.find(m => m.role === 'user')?.content || '',
                 historyCount: messages.filter(m => m.role !== 'system' && m.role !== 'user').length,
             },
-            response: response,
+            response: safeResponse,
             usage: usage || {},
         });
     }
