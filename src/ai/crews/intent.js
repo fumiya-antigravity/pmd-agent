@@ -16,7 +16,7 @@ const IntentCrew = (() => {
      * @returns {Array} メッセージ配列
      */
     function buildInitialMessages(userMessage, personality) {
-        const layer3 = RulesLoader.getCore();
+        const layer3 = RulesLoader.getForPhase0();
         const prompt = IntentPrompt.buildInitial(layer3, personality);
 
         return [

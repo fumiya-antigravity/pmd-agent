@@ -166,9 +166,9 @@ const Pipeline = (() => {
 
         // === Phase 1: 並列FB収集 ===
         console.log('[Pipeline v4] Phase1: 並列FB収集');
-        const layer3 = RulesLoader.getCore();
+        const layer3Phase1 = RulesLoader.getForPhase1();
         const phase1Prompts = PerspectivePrompts.buildAll(
-            phase0Result, layer3, personality, null, userMessage
+            phase0Result, layer3Phase1, personality, null, userMessage
         );
 
         const phase1Results = await runPhase1Parallel(phase1Prompts, signal);
@@ -202,8 +202,9 @@ const Pipeline = (() => {
 
         // === Phase 3: 最終構造化 ===
         console.log('[Pipeline v4] Phase3: 最終構造化');
+        const layer3Phase3 = RulesLoader.getForPhase3();
         const phase3Result = await runPhase3(
-            phase0Result, synthesisResult, userMessage, layer3, signal
+            phase0Result, synthesisResult, userMessage, layer3Phase3, signal
         );
 
         // レガシー互換: aspectUpdatesを結果に含める
@@ -267,9 +268,9 @@ const Pipeline = (() => {
 
         // === Phase 1: 並列FB収集 ===
         console.log('[Pipeline v4] Phase1: 並列FB収集');
-        const layer3 = RulesLoader.getCore();
+        const layer3Phase1 = RulesLoader.getForPhase1();
         const phase1Prompts = PerspectivePrompts.buildAll(
-            phase0Result, layer3, personality, progressSummary, userMessage
+            phase0Result, layer3Phase1, personality, progressSummary, userMessage
         );
         const phase1Results = await runPhase1Parallel(phase1Prompts, signal);
 
@@ -303,8 +304,9 @@ const Pipeline = (() => {
 
         // === Phase 3: 最終構造化 ===
         console.log('[Pipeline v4] Phase3: 最終構造化');
+        const layer3Phase3 = RulesLoader.getForPhase3();
         const phase3Result = await runPhase3(
-            phase0Result, synthesisResult, userMessage, layer3, signal, conversationHistory
+            phase0Result, synthesisResult, userMessage, layer3Phase3, signal, conversationHistory
         );
 
         const finalResult = buildFinalResult(phase0Result, synthesisResult, phase3Result);
