@@ -22,17 +22,13 @@ const PerspectivePrompts = (() => {
     function buildTaskPrompt(task, layer3, goal, personality, progressSummary, userMessage) {
         let personalityHint = '';
         if (personality && personality.trim()) {
-            // Phase1ではパーソナリティの要点だけ載せる（トークン節約）
             personalityHint = `
 ## ユーザーの傾向（要点のみ）
 ${personality.substring(0, 500)}
 `;
         }
 
-        const prompt = `## プロダクト方向性
-${layer3}
-
-## このチャットのGoal
+        const prompt = `## このチャットのGoal
 ${goal}
 
 ${personalityHint}
@@ -83,10 +79,7 @@ ${existingPersonality}
 `;
         }
 
-        const prompt = `## プロダクト方向性
-${layer3}
-
-${existingSection}
+        const prompt = `${existingSection}
 
 ## タスク: ユーザーのパーソナリティ分析
 

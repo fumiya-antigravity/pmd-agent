@@ -68,21 +68,19 @@ const RulesLoader = (() => {
     // ===================================================
 
     /**
-     * Phase0用: 根本思想 + トーンのみ
-     * Goal特定・タスク分解に集中させる。5観点やstatus判定は不要。
-     * JSON出力形式はintent.jsが定義する。
+     * Phase0用: 空（プロンプト側でlayer3を使用しない設計）
+     * Goal特定・タスク分解に集中させる。人格・思想・トーンは全て不要。
      */
     function getForPhase0() {
-        return `${IDENTITY}\n\n${ROOT_PHILOSOPHY}\n\n${TONE}`;
+        return '';
     }
 
     /**
-     * Phase1用: 根本思想 + トーンのみ
-     * タスクFB収集に集中。自由テキストで大量に返させる。
-     * 5観点・status判定・品質基準・JSON強制は全て除外。
+     * Phase1用: 空（プロンプト側でlayer3を使用しない設計）
+     * タスクFB収集に集中。Goal+タスク指示だけで十分。
      */
     function getForPhase1() {
-        return `${IDENTITY}\n\n${ROOT_PHILOSOPHY}\n\n${TONE}`;
+        return '';
     }
 
     /**

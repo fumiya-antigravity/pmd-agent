@@ -7,38 +7,29 @@
    =================================================== */
 
 const IntentPrompt = (() => {
-    'use strict';
+  'use strict';
 
-    /**
-     * 初回分析用プロンプト（新規セッション）
-     * @param {string} layer3 - RulesLoader.getCore()からのプロダクト方向性
-     * @param {string|null} personality - user_context.raw_personality（なければnull）
-     */
-    function buildInitial(layer3, personality) {
-        let layer2Section = '';
-        if (personality && personality.trim()) {
-            layer2Section = `
+  /**
+   * 初回分析用プロンプト（新規セッション）
+   * @param {string} layer3 - 未使用（後方互換で残す）
+   * @param {string|null} personality - user_context.raw_personality（なければnull）
+   */
+  function buildInitial(layer3, personality) {
+    let personalitySection = '';
+    if (personality && personality.trim()) {
+      personalitySection = `
 ## このユーザーについて（過去の対話から蓄積された情報）
 ${personality}
 `;
-        } else {
-            layer2Section = `
-## このユーザーについて
-初めてのユーザーです。パーソナリティ情報はまだありません。
-`;
-        }
+    }
 
-        return `## プロダクト方向性（北極星）
-${layer3}
-
-${layer2Section}
-
+    return `${personalitySection}
 ## タスク: 初回Goal特定 + タスク分解
 
 ユーザーの入力を読み、以下を整理せよ。
 
 ### 1. Goal
-この人が最終的に達成したいことは何か。ユーザーの言葉に忠実に。AI側の解釈を混ぜるな。
+この人が最終的に達成したいことは何か。ユーザーの言葉に忠実に。
 
 ### 2. As-is（現状の事実）
 入力から読み取れる現状をリストアップ。
@@ -48,22 +39,19 @@ ${layer2Section}
 
 ### 3. Gap
 GoalとAs-isの間に何が足りないか。
-「一般的にPRDに必要な情報」ではなく、**このGoalに到達するために必要な情報**は何か。
+**このGoalに到達するために必要な情報**は何か。
 
 ### 4. タスク分解
-GapをGoalに向けて埋めるために、**何を明らかにすべきか**をタスクとして列挙。
+Gapを埋めるために、**何を明らかにすべきか**をタスクとして列挙。
 各タスクには以下を含むこと:
 - **name**: 何を明らかにするか（端的に）
 - **why**: なぜこのタスクが必要か（Goalとの結びつき）
 - **doneWhen**: どのような情報が集まれば完了するか（完了条件）
 
+タスクはGoalから逆算せよ。「一般的にPRDに必要な情報」からの逆算は禁止。
+
 ### 5. 優先順位
 タスクの依存関係と重要度に基づいて、priority（1が最優先）を付与せよ。
-
-## 重要な原則
-- 5観点（background/problem/target/impact/urgency）への当てはめはここではやるな
-- ユーザーの言葉に忠実であれ。Goal/As-isの記述にAI側の解釈を混ぜるな
-- タスクはGoalから逆算せよ。PRD一般論からの逆算は禁止
 
 ## JSON出力
 {
@@ -81,32 +69,28 @@ GapをGoalに向けて埋めるために、**何を明らかにすべきか**を
     }
   ]
 }`;
-    }
+  }
 
-    /**
-     * セッション継続用プロンプト（2ターン目以降 — Goal更新判定）
-     * @param {string} layer3 - プロダクト方向性
-     * @param {string|null} personality - パーソナリティ
-     * @param {string} previousGoal - 前回のGoal
-     * @param {Array} previousTasks - 前回のタスク分解
-     * @param {string} progressSummary - これまでの進捗サマリ
-     */
-    function buildSession(layer3, personality, previousGoal, previousTasks, progressSummary) {
-        let layer2Section = '';
-        if (personality && personality.trim()) {
-            layer2Section = `
+  /**
+   * セッション継続用プロンプト（2ターン目以降 — Goal更新判定）
+   * @param {string} layer3 - 未使用（後方互換で残す）
+   * @param {string|null} personality - パーソナリティ
+   * @param {string} previousGoal - 前回のGoal
+   * @param {Array} previousTasks - 前回のタスク分解
+   * @param {string} progressSummary - これまでの進捗サマリ
+   */
+  function buildSession(layer3, personality, previousGoal, previousTasks, progressSummary) {
+    let personalitySection = '';
+    if (personality && personality.trim()) {
+      personalitySection = `
 ## このユーザーについて（過去の対話から蓄積された情報）
 ${personality}
 `;
-        }
+    }
 
-        const tasksJson = JSON.stringify(previousTasks || [], null, 2);
+    const tasksJson = JSON.stringify(previousTasks || [], null, 2);
 
-        return `## プロダクト方向性（北極星）
-${layer3}
-
-${layer2Section}
-
+    return `${personalitySection}
 ## 前回までのGoal
 ${previousGoal || '未設定'}
 
@@ -129,6 +113,8 @@ ${progressSummary || 'まだ進捗なし'}
 - 前回のタスクで完了したものはどれか（ユーザーの回答で情報が得られたか）
 - 新たに必要になったタスクはあるか
 - 次に取り組むべきタスクはどれか
+
+タスクはGoalから逆算せよ。一般論からの分解は禁止。
 
 ### 3. 発言の目的適合性
 ユーザーの発言はGoalに沿っているか？
@@ -155,7 +141,7 @@ ${progressSummary || 'まだ進捗なし'}
   "onTrack": true/false,
   "redirectNote": "脱線時のみ: どう戻すか"
 }`;
-    }
+  }
 
-    return { buildInitial, buildSession };
+  return { buildInitial, buildSession };
 })();
