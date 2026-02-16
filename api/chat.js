@@ -1,32 +1,48 @@
 /**
- * Vercel Edge Function: /api/chat
- * WHY_SESSION / DEEP_DIVE のAI呼び出しエンドポイント
+ * Vercel Serverless Function: /api/chat
+ * Node.js Runtime — maxDuration 60s（Edge Runtime の 25s 制限を回避）
  */
-export const config = { runtime: 'edge' };
+export const config = {
+    maxDuration: 60,
+};
 
-export default async function handler(req) {
+export default async function handler(req, res) {
+    // CORS headers
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Max-Age', '86400');
+
     if (req.method === 'OPTIONS') {
-        return new Response(null, {
-            status: 204,
-            headers: corsHeaders(),
-        });
+        return res.status(204).end();
     }
 
     if (req.method !== 'POST') {
-        return jsonResponse(405, { error: 'Method not allowed' });
+        return res.status(405).json({ error: 'Method not allowed' });
     }
 
     try {
-        const body = await req.json();
-        const { messages, jsonMode = true, maxTokens } = body;
+        const { messages, jsonMode = true, maxTokens } = req.body || {};
 
         if (!messages?.length) {
-            return jsonResponse(400, { error: 'messages required' });
+            return res.status(400).json({ error: 'messages required' });
         }
 
         const apiKey = process.env.OPENAI_API_KEY;
         if (!apiKey) {
-            return jsonResponse(500, { error: 'OPENAI_API_KEY not configured' });
+            return res.status(500).json({ error: 'OPENAI_API_KEY not configured' });
+        }
+
+        const openaiBody = {
+            model: 'gpt-4o-mini',
+            messages,
+            temperature: 0.7,
+            max_tokens: maxTokens || 4000,
+        };
+
+        // jsonMode=false の場合、response_format を外す（Phase1 自由テキスト用）
+        if (jsonMode !== false && jsonMode !== 'false' && jsonMode !== 0) {
+            openaiBody.response_format = { type: 'json_object' };
         }
 
         const openaiResp = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -35,19 +51,13 @@ export default async function handler(req) {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${apiKey}`,
             },
-            body: JSON.stringify({
-                model: 'gpt-4o-mini',
-                messages,
-                temperature: 0.7,
-                max_tokens: maxTokens || 4000,
-                ...(jsonMode !== false ? { response_format: { type: 'json_object' } } : {}),
-            }),
+            body: JSON.stringify(openaiBody),
         });
 
         if (!openaiResp.ok) {
             const errBody = await openaiResp.text();
             console.error(`[OpenAI Error] ${openaiResp.status}: ${errBody}`);
-            return jsonResponse(openaiResp.status, {
+            return res.status(openaiResp.status).json({
                 error: `OpenAI API error: ${openaiResp.status}`,
                 detail: errBody,
             });
@@ -55,46 +65,18 @@ export default async function handler(req) {
 
         const result = await openaiResp.json();
         const reply = result.choices[0].message.content;
+        const usage = result.usage || {};
 
         // デバッグログ
-        try {
-            const parsed = JSON.parse(reply);
-            const hasRelated = 'relatedUpdates' in parsed;
-            const relatedCount = (parsed.relatedUpdates || []).length;
-            console.log(`[AI Response] relatedUpdates: ${hasRelated}, count: ${relatedCount}`);
-            if (parsed.aspectUpdate) {
-                console.log(`[AI Response] aspectUpdate: aspect=${parsed.aspectUpdate.aspect}, status=${parsed.aspectUpdate.status}`);
-            }
-        } catch {
-            console.log(`[AI Response] JSON parse failed, raw length: ${reply.length}`);
-        }
+        console.log(`[AI] model=${result.model} tokens=${usage.total_tokens || '?'}`);
 
-        return jsonResponse(200, {
+        return res.status(200).json({
             reply,
             model: result.model,
-            usage: result.usage || {},
+            usage,
         });
     } catch (err) {
         console.error('[Server Error]', err);
-        return jsonResponse(500, { error: err.message });
+        return res.status(500).json({ error: err.message });
     }
-}
-
-function corsHeaders() {
-    return {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
-        'Access-Control-Max-Age': '86400',
-    };
-}
-
-function jsonResponse(status, data) {
-    return new Response(JSON.stringify(data), {
-        status,
-        headers: {
-            'Content-Type': 'application/json; charset=utf-8',
-            ...corsHeaders(),
-        },
-    });
 }
