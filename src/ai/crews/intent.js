@@ -35,7 +35,7 @@ const IntentCrew = (() => {
      * @returns {Array} メッセージ配列
      */
     function buildSessionMessages(userMessage, personality, previousGoal, previousTasks, progressSummary) {
-        const layer3 = RulesLoader.getCore();
+        const layer3 = RulesLoader.getForPhase0();
         const prompt = IntentPrompt.buildSession(
             layer3, personality, previousGoal, previousTasks, progressSummary
         );
