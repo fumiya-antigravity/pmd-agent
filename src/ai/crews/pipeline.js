@@ -1,16 +1,19 @@
 /* ===================================================
-   パイプライン v3: Crewオーケストレーション型
-   
+   パイプライン v4: 多段収集・コード統合アーキテクチャ
+
    設計思想:
-   - 各Crewがプロンプト組立と結果パースを担当
-   - pipeline.jsはCrewの呼出し順序と結果統合のみを管理
-   - API呼出し回数は旧版と同じ（1-2回）
-   - プロンプトの重複を完全排除（RulesLoader/Promptモジュール経由）
-   - 判定は全てAIに委ねる。コードレベルでのstatus上書きは行わない
-   - 全API通信のリクエスト/レスポンスをプロセスログとして記録
+   - Phase0: Goal特定+タスク分解 (APIコール1回)
+   - Phase1: タスク駆動FB収集+メタタスク (並列APIコール)
+   - Phase2: コード統合+パーソナリティdiffマージ (APIなし)
+   - Phase3: 最終構造化 (APIコール1回)
+
+   3層Context:
+   - Layer3: プロダクト方向性 (RulesLoader — 不変)
+   - Layer2: Goal + パーソナリティ (DB永続 — 動的進化)
+   - Layer1: セッション進捗 (DB蓄積)
    =================================================== */
 
-const AIApi = (() => {
+const Pipeline = (() => {
     'use strict';
 
     const API_URL = 'http://localhost:8888/api/chat';
@@ -19,53 +22,30 @@ const AIApi = (() => {
     // プロセスログ管理
     // ===================================================
     let _processLog = [];
-
     function clearProcessLog() { _processLog = []; }
     function getProcessLog() { return _processLog; }
 
     function addLog(step, label, messages, response, usage) {
-        // 循環参照防止: responseから内部プロパティ(_processLog, _usage)を除外してコピー
-        let safeResponse = {};
-        try {
-            const { _processLog: _pl, _usage: _u, ...rest } = response || {};
-            safeResponse = JSON.parse(JSON.stringify(rest));
-        } catch (e) {
-            safeResponse = { _error: 'シリアライズ失敗: ' + e.message };
-        }
+        const systemContent = (messages.find(m => m.role === 'system')?.content || '');
+        const userContent = (messages.find(m => m.role === 'user')?.content || '');
+
         _processLog.push({
             step,
             label,
-            timestamp: new Date().toLocaleTimeString('ja-JP'),
-            request: {
-                messageCount: messages.length,
-                systemPrompt: messages.find(m => m.role === 'system')?.content || '',
-                userMessage: messages.find(m => m.role === 'user')?.content || '',
-                historyCount: messages.filter(m => m.role !== 'system' && m.role !== 'user').length,
-            },
-            response: safeResponse,
-            usage: usage || {},
+            inputTokens: usage?.prompt_tokens || 0,
+            outputTokens: usage?.completion_tokens || 0,
+            totalTokens: usage?.total_tokens || 0,
+            systemPromptLength: systemContent.length,
+            userMessageLength: userContent.length,
+            responseKeys: response ? Object.keys(response).filter(k => !k.startsWith('_')) : [],
+            timestamp: new Date().toISOString(),
         });
+
+        console.log(`[Pipeline] Step${step} [${label}] tokens:${usage?.total_tokens || '?'}`);
     }
 
     // ===================================================
-    // PHASE_CHECK: 観点チェック用プロンプト（このフェーズは単純なので直書き維持）
-    // ===================================================
-    const PHASE_CHECK = `## タスク: 観点チェック
-全観点の網羅性と品質を診断せよ。
-
-## JSON出力
-{
-  "thinking": "各観点の評価詳細",
-  "aspectResults": {
-    "[観点キー]": {"status": "ok|thin|empty", "feedback": "評価コメント"}
-  },
-  "suggestedAspects": [{"key": "英語キー", "label": "日本語名", "emoji": "絵文字", "reason": "提案理由"}],
-  "allApproved": true|false,
-  "message": "総合フィードバック（400文字以内）"
-}`;
-
-    // ===================================================
-    // API呼出し（共通基盤）
+    // API呼出し（共通基盤）— v3から転用、レスポンスパース含む
     // ===================================================
     async function callAPI(messages, signal) {
         console.log('[callAPI] リクエスト送信: messages=', messages.length, '件');
@@ -96,162 +76,380 @@ const AIApi = (() => {
                     try { parsed = JSON.parse(match[0]); } catch { /* fall through */ }
                 }
                 if (!parsed) {
-                    console.warn('[callAPI] JSONパース失敗、フォールバック');
-                    return { _parsed: { message: reply, thinking: null }, _usage: data.usage || {} };
+                    // Phase1は自由テキストなのでJSONパース失敗は正常
+                    console.log('[callAPI] テキストレスポンスとして処理');
+                    return { _text: reply, _usage: data.usage || {} };
                 }
             }
         }
 
-        // デバッグログ
-        console.log('[callAPI] === AI応答構造 ===');
-        console.log('[callAPI] キー:', Object.keys(parsed));
-        if (parsed.aspectUpdates) {
-            console.log('[callAPI] aspectUpdates:');
-            for (const [k, v] of Object.entries(parsed.aspectUpdates)) {
-                console.log(`  ${k}: status=${v.status}, text="${(v.text || '').substring(0, 50)}"`);
-            }
-        }
-        if (parsed.aspectUpdate) {
-            console.log(`[callAPI] aspectUpdate: aspect=${parsed.aspectUpdate.aspect}, status=${parsed.aspectUpdate.status}`);
-        }
-        if (parsed.crossCheck) {
-            console.log('[callAPI] crossCheck:', JSON.stringify(parsed.crossCheck));
-        }
-        if (parsed.contamination?.detected) {
-            console.log('[callAPI] contamination:', JSON.stringify(parsed.contamination.items));
-        }
-        console.log('[callAPI] message:', (parsed.message || '').substring(0, 100));
-        console.log('[callAPI] nextAspect:', parsed.nextAspect || 'null');
-
-        // usageを一緒に返す（addLog用）
         parsed._usage = data.usage || {};
         return parsed;
     }
 
-    // ===================================================
-    // パイプライン: 初回分析（API 1回 + バリデーション1回）
-    // ===================================================
-    async function analyzeInitialInput(overview, whyText, signal) {
-        console.log('[Pipeline] === 初回分析開始 ===');
-        clearProcessLog();
-
-        // ① AnalysisCrewがプロンプトを組立て → 1回のAPI呼出し
-        const messages = AnalysisCrew.buildInitialMessages(overview, whyText);
-        const result = await callAPI(messages, signal);
-        const usage1 = result._usage; delete result._usage;
-        addLog(1, 'AnalysisCrew — 初回分析', messages, result, usage1);
-        console.log('[Pipeline] ① AnalysisCrew完了（API 1回目）');
-
-        // ② AnalysisCrewが結果をパース・検証
-        AnalysisCrew.parseResult(result);
-
-        // ③ ok判定が1つ以上 OR FB品質違反あり → 2回目バリデーション（AIセカンドオピニオン）
-        const okAspects = result.aspectUpdates
-            ? Object.entries(result.aspectUpdates).filter(([, v]) => v.status === 'ok')
-            : [];
-        const hasFBViolations = result._fbViolations && result._fbViolations.length > 0;
-
-        if (okAspects.length > 0 || hasFBViolations) {
-            const triggerReason = hasFBViolations ? `FB品質違反${result._fbViolations.length}件` : `ok判定${okAspects.length}件`;
-            console.log('[Pipeline] ③ 2回目バリデーション: ' + triggerReason + 'を再評価');
-            try {
-                const valPrompt = OrchestratorCrew.buildValidationPrompt();
-
-                // 違反情報をプロンプトに追加
-                let violationSection = '';
-                if (hasFBViolations) {
-                    violationSection = '\n\n## ⚠️ コードレベル品質違反（必ず修正せよ）\n';
-                    for (const av of result._fbViolations) {
-                        violationSection += `\n### ${av.aspect}:\n`;
-                        for (const v of av.violations) {
-                            violationSection += `- **${v.type}** [${v.field}]: ${v.detail}\n`;
-                        }
-                    }
-                    violationSection += '\n上記の違反がある観点は、修正後のreason/advice/exampleをrevisionsに含めよ。\n';
-                }
-
-                const valMessages = [
-                    { role: 'system', content: valPrompt },
-                    {
-                        role: 'user', content: '## ユーザー原文\n## 概要\n' + overview + '\n\n## Why\n' + whyText
-                            + '\n\n## 1回目AIの判定結果\n' + JSON.stringify(result.aspectUpdates, null, 2) + violationSection
-                    },
-                ];
-                const valResult = await callAPI(valMessages, signal);
-                const usage2 = valResult._usage; delete valResult._usage;
-                const label = hasFBViolations ? 'OrchestratorCrew — FB品質補正' : 'OrchestratorCrew — AIセカンドオピニオン';
-                addLog(2, label, valMessages, valResult, usage2);
-
-                console.log('[Pipeline] 2回目バリデーション結果:', JSON.stringify(valResult));
-                OrchestratorCrew.applyValidation(result, valResult);
-            } catch (e) {
-                console.warn('[Pipeline] 2回目バリデーション失敗（1回目結果を使用）:', e.message);
-            }
-        }
-
-        // ④ relatedUpdatesフィルタリング
-        result.relatedUpdates = OrchestratorCrew.filterRelatedUpdates(result.relatedUpdates);
-
-        // 最終結果ログ
-        if (result.aspectUpdates) {
-            console.log('[Pipeline] === 初回分析最終結果 ===');
-            for (const [k, v] of Object.entries(result.aspectUpdates)) {
-                console.log('  ' + k + ': status=' + v.status);
-            }
-        }
-
-        // プロセスログを結果に付与（UI表示用）
-        result._processLog = getProcessLog();
-
-        console.log('[Pipeline] === 初回分析完了 ===');
-        return result;
+    /**
+     * テキスト応答を安全に取得
+     */
+    function getResponseText(result) {
+        if (result._text) return result._text;
+        if (typeof result === 'string') return result;
+        return JSON.stringify(result);
     }
 
     // ===================================================
-    // パイプライン: 壁打ちチャット（API 1回 + 条件付き検証1回）
+    // PHASE_CHECK: 観点チェック用プロンプト（維持）
+    // ===================================================
+    const PHASE_CHECK = `## 全観点レビュー
+下記の5観点テキストを俯瞰し、status再評価と所見を返せ。
+{
+  "overview": {"overallStatus": "ready|needs_work", "summary": "全体所見"},
+  "aspects": {"<key>": {"currentStatus": "ok|thin|empty", "revisedStatus": "ok|thin|empty", "comment": "改善点"}},
+  "suggestedAspects": [{"key": "英語キー", "label": "日本語名", "emoji": "絵文字", "reason": "提案理由"}],
+  "allApproved": true|false,
+  "message": "総合フィードバック（400文字以内）"
+}`;
+
+    // ===================================================
+    // パイプライン: 初回分析 (Phase0 → 1 → 2 → 3)
+    // ===================================================
+    async function analyzeInitialInput(overview, whyText, sessionId, signal) {
+        console.log('[Pipeline v4] === 初回分析開始 ===');
+        clearProcessLog();
+
+        const userMessage = `## 概要\n${overview}\n\n## Why\n${whyText}`;
+
+        // --- Layer読込 ---
+        const personality = await loadPersonality();
+        const turnNumber = 1;
+
+        // === Phase 0: Goal特定 + タスク分解 ===
+        console.log('[Pipeline v4] Phase0: Goal特定');
+        const phase0Messages = IntentCrew.buildInitialMessages(userMessage, personality);
+        const phase0Raw = await callAPI(phase0Messages, signal);
+        const usage0 = phase0Raw._usage; delete phase0Raw._usage;
+        const phase0Result = IntentCrew.parseResult(phase0Raw);
+        addLog(1, 'Phase0 — Goal特定+タスク分解', phase0Messages, phase0Result, usage0);
+
+        // Goal履歴をDB保存
+        try {
+            await SupabaseClient.saveGoalHistory(sessionId, turnNumber, {
+                goal: phase0Result.goal,
+                tasks: phase0Result.tasks,
+                asIs: phase0Result.asIs,
+                gap: phase0Result.gap,
+                assumptions: phase0Result.assumptions,
+            });
+        } catch (e) { console.warn('[Pipeline] Goal保存失敗:', e.message); }
+
+        // === Phase 1: 並列FB収集 ===
+        console.log('[Pipeline v4] Phase1: 並列FB収集');
+        const layer3 = RulesLoader.getCore();
+        const phase1Prompts = PerspectivePrompts.buildAll(
+            phase0Result, layer3, personality, null, userMessage
+        );
+
+        const phase1Results = await runPhase1Parallel(phase1Prompts, signal);
+
+        // === Phase 2: コード統合 ===
+        console.log('[Pipeline v4] Phase2: コード統合');
+        const synthesisResult = SynthesisCrew.synthesize(phase0Result, phase1Results);
+
+        // パーソナリティdiffマージ
+        const existingContext = await loadUserContext();
+        const personalityUpdates = SynthesisCrew.mergePersonality(
+            synthesisResult.personalityAnalysis, existingContext
+        );
+        if (personalityUpdates) {
+            try {
+                await SupabaseClient.upsertUserContext(personalityUpdates);
+                console.log('[Pipeline v4] パーソナリティ更新完了');
+            } catch (e) { console.warn('[Pipeline] パーソナリティ保存失敗:', e.message); }
+        }
+
+        // セッション進捗をDB保存
+        try {
+            await SupabaseClient.saveSessionProgress(sessionId, turnNumber, {
+                resolvedItems: synthesisResult.resolvedItems,
+                accumulatedFacts: synthesisResult.accumulatedFacts,
+                synthesisResult: synthesisResult.aspectData,
+            });
+        } catch (e) { console.warn('[Pipeline] 進捗保存失敗:', e.message); }
+
+        addLog(2, 'Phase2 — コード統合', [], synthesisResult, {});
+
+        // === Phase 3: 最終構造化 ===
+        console.log('[Pipeline v4] Phase3: 最終構造化');
+        const phase3Result = await runPhase3(
+            phase0Result, synthesisResult, userMessage, layer3, signal
+        );
+
+        // レガシー互換: aspectUpdatesを結果に含める
+        const finalResult = buildFinalResult(phase0Result, synthesisResult, phase3Result);
+        finalResult._processLog = getProcessLog();
+
+        console.log('[Pipeline v4] === 初回分析完了 ===');
+        return finalResult;
+    }
+
+    // ===================================================
+    // パイプライン: 壁打ちチャット (Phase0 → 1 → 2 → 3)
     // ===================================================
     async function chat(userMessage, context, signal) {
-        console.log('[Pipeline] === チャット開始 ===');
+        console.log('[Pipeline v4] === チャット開始 ===');
         clearProcessLog();
 
-        // ① AnalysisCrewがプロンプト組立て → 1回のAPI呼出し
-        const messages = AnalysisCrew.buildSessionMessages(userMessage, context);
-        const result = await callAPI(messages, signal);
-        const usage1 = result._usage; delete result._usage;
-        addLog(1, 'AnalysisCrew — 壁打ち分析', messages, result, usage1);
-        console.log('[Pipeline] ① AnalysisCrew完了（API 1回目）');
+        const sessionId = context?.sessionId;
 
-        // ② AnalysisCrewが結果をパース
-        AnalysisCrew.parseResult(result);
+        // --- Layer読込 ---
+        const personality = await loadPersonality();
+        const latestGoal = sessionId ? await loadLatestGoal(sessionId) : null;
+        const latestProgress = sessionId ? await loadLatestProgress(sessionId) : null;
+        const progressSummary = latestProgress
+            ? SynthesisCrew.buildProgressSummary(latestProgress)
+            : '';
 
-        // ③ VerifyCrew: thin判定時 または FB品質違反時に検証（API 2回目）
-        const hasFBViolations = result._fbViolations && result._fbViolations.length > 0;
-        const verifyMessages = VerifyCrew.buildMessages(result, userMessage, hasFBViolations);
-        if (verifyMessages) {
-            try {
-                const verifyResult = await callAPI(verifyMessages, signal);
-                const usage2 = verifyResult._usage; delete verifyResult._usage;
-                const label = hasFBViolations ? 'VerifyCrew — FB品質補正' : 'VerifyCrew — thin検証';
-                addLog(2, label, verifyMessages, verifyResult, usage2);
-                VerifyCrew.merge(result, verifyResult);
-                console.log(`[Pipeline] ③ ${label}完了（API 2回目）`);
-            } catch (e) {
-                console.warn('[Pipeline] VerifyCrew失敗、スキップ:', e.message);
-            }
+        // ターン番号
+        const turnNumber = latestGoal ? (latestGoal.turn_number || 0) + 1 : 1;
+
+        // === Phase 0: Goal更新判定 ===
+        console.log('[Pipeline v4] Phase0: Goal更新判定');
+        const phase0Messages = IntentCrew.buildSessionMessages(
+            userMessage, personality,
+            latestGoal?.goal_text, latestGoal?.tasks, progressSummary
+        );
+        const phase0Raw = await callAPI(phase0Messages, signal);
+        const usage0 = phase0Raw._usage; delete phase0Raw._usage;
+        const phase0Result = IntentCrew.parseResult(phase0Raw);
+        addLog(1, 'Phase0 — Goal更新判定', phase0Messages, phase0Result, usage0);
+
+        if (phase0Result.goalUpdated) {
+            console.log('[Pipeline v4] Goal更新: ' + phase0Result.goal);
         }
 
-        // ④ relatedUpdatesフィルタリング
-        result.relatedUpdates = OrchestratorCrew.filterRelatedUpdates(result.relatedUpdates);
+        // Goal履歴をDB保存
+        if (sessionId) {
+            try {
+                await SupabaseClient.saveGoalHistory(sessionId, turnNumber, {
+                    goal: phase0Result.goal,
+                    goalUpdated: phase0Result.goalUpdated || false,
+                    updateReason: phase0Result.updateReason || '',
+                    tasks: phase0Result.tasks,
+                    asIs: phase0Result.asIs,
+                    gap: phase0Result.gap,
+                    assumptions: phase0Result.assumptions,
+                });
+            } catch (e) { console.warn('[Pipeline] Goal保存失敗:', e.message); }
+        }
 
-        // プロセスログを結果に付与（UI表示用）
-        result._processLog = getProcessLog();
+        // === Phase 1: 並列FB収集 ===
+        console.log('[Pipeline v4] Phase1: 並列FB収集');
+        const layer3 = RulesLoader.getCore();
+        const phase1Prompts = PerspectivePrompts.buildAll(
+            phase0Result, layer3, personality, progressSummary, userMessage
+        );
+        const phase1Results = await runPhase1Parallel(phase1Prompts, signal);
 
-        console.log('[Pipeline] === チャット完了 ===');
+        // === Phase 2: コード統合 ===
+        console.log('[Pipeline v4] Phase2: コード統合');
+        const synthesisResult = SynthesisCrew.synthesize(phase0Result, phase1Results);
+
+        // パーソナリティdiffマージ
+        const existingContext = await loadUserContext();
+        const personalityUpdates = SynthesisCrew.mergePersonality(
+            synthesisResult.personalityAnalysis, existingContext
+        );
+        if (personalityUpdates) {
+            try {
+                await SupabaseClient.upsertUserContext(personalityUpdates);
+            } catch (e) { console.warn('[Pipeline] パーソナリティ保存失敗:', e.message); }
+        }
+
+        // セッション進捗をDB保存
+        if (sessionId) {
+            try {
+                await SupabaseClient.saveSessionProgress(sessionId, turnNumber, {
+                    resolvedItems: synthesisResult.resolvedItems,
+                    accumulatedFacts: synthesisResult.accumulatedFacts,
+                    synthesisResult: synthesisResult.aspectData,
+                });
+            } catch (e) { console.warn('[Pipeline] 進捗保存失敗:', e.message); }
+        }
+
+        addLog(2, 'Phase2 — コード統合', [], synthesisResult, {});
+
+        // === Phase 3: 最終構造化 ===
+        console.log('[Pipeline v4] Phase3: 最終構造化');
+        const phase3Result = await runPhase3(
+            phase0Result, synthesisResult, userMessage, layer3, signal
+        );
+
+        const finalResult = buildFinalResult(phase0Result, synthesisResult, phase3Result);
+        finalResult._processLog = getProcessLog();
+
+        console.log('[Pipeline v4] === チャット完了 ===');
+        return finalResult;
+    }
+
+    // ===================================================
+    // Phase1: 並列APIコール実行
+    // ===================================================
+    async function runPhase1Parallel(prompts, signal) {
+        console.log(`[Pipeline v4] Phase1並列実行: ${prompts.length}件`);
+
+        const results = await Promise.allSettled(
+            prompts.map(async (p, i) => {
+                try {
+                    const raw = await callAPI(p.messages, signal);
+                    const usage = raw._usage; delete raw._usage;
+                    addLog(
+                        10 + i,
+                        `Phase1 — ${p.name}`,
+                        p.messages, raw, usage
+                    );
+                    return {
+                        type: p.type,
+                        id: p.id,
+                        name: p.name,
+                        response: raw._text || raw,
+                    };
+                } catch (e) {
+                    console.warn(`[Phase1] ${p.name}失敗:`, e.message);
+                    return { type: p.type, id: p.id, name: p.name, response: null };
+                }
+            })
+        );
+
+        return results.map(r => r.status === 'fulfilled' ? r.value : {
+            type: 'task', id: 'error', name: 'エラー', response: null,
+        });
+    }
+
+    // ===================================================
+    // Phase3: 最終構造化
+    // ===================================================
+    async function runPhase3(phase0Result, synthesisResult, userMessage, layer3, signal) {
+        // Phase2の統合結果を元に、5観点の構造化FBを生成
+        const aspectSummary = Object.entries(synthesisResult.aspectData)
+            .map(([key, data]) => {
+                return `### ${key} (status: ${data.status})
+テキスト: ${data.texts.join('\n').substring(0, 500)}
+元タスク: ${data.sources.join(', ')}`;
+            }).join('\n\n');
+
+        const phase3Prompt = `## プロダクト方向性
+${layer3}
+
+## タスク: 最終構造化
+
+以下の分析素材を基に、ユーザーへのフィードバックを構造化せよ。
+**分析は完了済み。あなたの仕事は素材を整形し、わかりやすく伝えること。**
+
+## Goal
+${phase0Result.goal}
+
+## 分析素材（Phase2統合結果）
+${aspectSummary}
+
+## ユーザーの原文
+${userMessage}
+
+## JSON出力
+{
+  "aspectUpdates": {
+    "<aspect_key>": {
+      "status": "ok|thin|empty",
+      "text": "蓄積事実+推論+残存課題",
+      "quoted": "ユーザー原文の引用",
+      "reason": "引用参照→充足分析→不足分析→判定結論",
+      "advice": "具体的アクション→対象特定→思考誘発",
+      "example": "状況設定→記述例→思考の呼び水"
+    }
+  },
+  "message": "フィードバック（共感→質問、300文字以内）",
+  "nextAspect": "次に深掘りすべき観点キー or null"
+}`;
+
+        const messages = [
+            { role: 'system', content: phase3Prompt },
+        ];
+
+        const result = await callAPI(messages, signal);
+        const usage = result._usage; delete result._usage;
+        addLog(20, 'Phase3 — 最終構造化', messages, result, usage);
+
         return result;
     }
 
     // ===================================================
-    // パイプライン: 観点チェック（API 1回）
+    // 最終結果の組み立て（レガシーUI互換）
+    // ===================================================
+    function buildFinalResult(phase0Result, synthesisResult, phase3Result) {
+        // Phase3のaspectUpdatesを使う
+        const result = {
+            aspectUpdates: phase3Result.aspectUpdates || {},
+            message: phase3Result.message || '',
+            nextAspect: phase3Result.nextAspect || null,
+            thinking: `Goal: ${phase0Result.goal}`,
+            // v4追加情報
+            _v4: {
+                goal: phase0Result.goal,
+                tasks: phase0Result.tasks,
+                taskStatus: synthesisResult.taskStatus,
+                resolvedItems: synthesisResult.resolvedItems,
+            },
+        };
+
+        // aspectUpdate（単一観点のセッション用互換）
+        if (phase3Result.aspectUpdate) {
+            result.aspectUpdate = phase3Result.aspectUpdate;
+        }
+
+        return result;
+    }
+
+    // ===================================================
+    // Layer読込ヘルパー
+    // ===================================================
+    async function loadPersonality() {
+        try {
+            const ctx = await SupabaseClient.getUserContext();
+            return ctx?.raw_personality || null;
+        } catch (e) {
+            console.warn('[Pipeline] パーソナリティ読込失敗:', e.message);
+            return null;
+        }
+    }
+
+    async function loadUserContext() {
+        try {
+            return await SupabaseClient.getUserContext();
+        } catch (e) {
+            console.warn('[Pipeline] UserContext読込失敗:', e.message);
+            return null;
+        }
+    }
+
+    async function loadLatestGoal(sessionId) {
+        try {
+            return await SupabaseClient.getLatestGoal(sessionId);
+        } catch (e) {
+            console.warn('[Pipeline] Goal読込失敗:', e.message);
+            return null;
+        }
+    }
+
+    async function loadLatestProgress(sessionId) {
+        try {
+            const progress = await SupabaseClient.getLatestProgress(sessionId);
+            return progress?.synthesis_result || null;
+        } catch (e) {
+            console.warn('[Pipeline] Progress読込失敗:', e.message);
+            return null;
+        }
+    }
+
+    // ===================================================
+    // 観点チェック（維持 — v3と同じ）
     // ===================================================
     async function checkAspects(aspects, signal) {
         clearProcessLog();

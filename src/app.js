@@ -423,7 +423,7 @@
         showTyping();
 
         try {
-            const result = await AIApi.analyzeInitialInput(overview, whyText, state.abortCtrl.signal);
+            const result = await Pipeline.analyzeInitialInput(overview, whyText, state.sessionId, state.abortCtrl.signal);
             removeTyping();
             state.sending = false;
 
@@ -590,7 +590,8 @@
         showTyping();
 
         try {
-            const result = await AIApi.chat(text, {
+            const result = await Pipeline.chat(text, {
+                sessionId: state.sessionId,
                 phase: state.deepDiveMode ? 'DEEP_DIVE' : state.phase,
                 currentAspect: state.currentAspect,
                 aspects: state.aspects,
@@ -826,7 +827,7 @@
         showTyping();
 
         try {
-            const result = await AIApi.checkAspects(state.aspects, state.abortCtrl.signal);
+            const result = await Pipeline.checkAspects(state.aspects, state.abortCtrl.signal);
             removeTyping();
 
             if (result.aspectResults) {
