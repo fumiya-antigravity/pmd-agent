@@ -1,5 +1,5 @@
 ---
-description: "データ永続化・DB設計ルール。保存→復元の完全性保証、フォールバック設計、フィールド一致チェック。DB関連コード変更時は必ず参照。"
+description: "データ永続化・DB設計ルール。保存→復元の完全性保証、関心の分離、DB保存独立性。DB関連コード変更時は必ず参照。"
 alwaysApply: true
 ---
 
@@ -72,3 +72,52 @@ return 'thin'; // OKはAI判定からのみ
 `message_id`等で別テーブルを参照する場合:
 - 参照元のレコード作成が成功していること（nullでないこと）を確認する
 - nullの場合はログに警告を出し、復元時にnull参照でクラッシュしないようにする
+
+## 6. 関心の分離（UI表示 vs DB保存）【最重要】
+
+> [!CAUTION]
+> 過去にこのルール違反で**全セッションのデータが保存されないバグ**が発生した（2026-02-16）。
+
+### DB保存をUI条件分岐の中に入れない
+DB保存コードは、UI表示の条件分岐（`if (result.message)`等）の**外側**に配置する。
+
+```javascript
+// ❌ 禁止: DB保存がUI表示条件に依存
+if (result.message) {
+    addMsg('ai', result.message);     // UI表示
+    await dbSync.saveMessage(...);     // DB保存 ← messageがfalsyなら実行されない！
+    await dbSync.saveAnalysisResult(...); // DB保存 ← 同上
+}
+
+// ✅ 正解: UI表示とDB保存を分離
+if (result.message) {
+    addMsg('ai', result.message);  // UI表示だけ
+}
+// DB保存は独立して常に実行
+await dbSync.saveMessage(...);
+await dbSync.saveAnalysisResult(...);
+```
+
+### DB保存は常に実行
+データが生成された時点で**無条件に**DB保存を実行する。
+保存すべきか否かの判断は`dbSync`層（`enabled`チェック、`sessionId`チェック）に任せる。
+
+### 変数宣言の順序
+DB保存に使う変数（例: `aiMsgRecord`）は、**使用箇所より前に**宣言・代入する。
+後方で宣言した変数を前方で参照することは禁止。
+
+## 7. DB保存の成否確認
+
+### 保存結果のログ出力（必須）
+全てのDB保存呼び出しの直後に、成否をログ出力する:
+```javascript
+const record = await dbSync.saveMessage(...);
+console.log(`[dbSync] saveMessage: id=${record?.id || 'FAILED'}`;
+```
+
+### L3検証: DB直接クエリ
+DB保存の実装後は、Supabase REST APIで**DBにデータが実際に存在するか**を直接確認する:
+```bash
+curl -s 'https://{project}.supabase.co/rest/v1/{table}?session_id=eq.{id}' -H 'apikey: {key}'
+```
+コードが「存在する」だけでは保存成功の証拠にならない。
