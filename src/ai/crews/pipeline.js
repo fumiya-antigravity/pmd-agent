@@ -55,7 +55,7 @@ const Pipeline = (() => {
             body: JSON.stringify({
                 messages,
                 jsonMode: options.jsonMode !== false,
-                maxTokens: options.maxTokens || 4000,
+                maxTokens: options.maxTokens || 2000,
             }),
             signal,
         });
@@ -307,37 +307,33 @@ const Pipeline = (() => {
     // Phase1: 並列APIコール実行
     // ===================================================
     async function runPhase1Parallel(prompts, signal) {
-        console.log(`[Pipeline v4] Phase1並列実行: ${prompts.length}件`);
+        console.log(`[Pipeline v4] Phase1順次実行: ${prompts.length}件`);
 
-        const results = await Promise.allSettled(
-            prompts.map(async (p, i) => {
-                try {
-                    // Phase1は自由テキストなのでjsonMode=false
-                    const raw = await callAPI(p.messages, signal, { jsonMode: false, maxTokens: 2000 });
-                    const usage = raw._usage || {}; delete raw._usage;
-                    // responseは必ず文字列にする
-                    const responseText = raw._text || (typeof raw === 'string' ? raw : JSON.stringify(raw));
-                    addLog(
-                        10 + i,
-                        `Phase1 — ${p.name}`,
-                        p.messages, { summary: responseText.substring(0, 200) }, usage
-                    );
-                    return {
-                        type: p.type,
-                        id: p.id,
-                        name: p.name,
-                        response: responseText,
-                    };
-                } catch (e) {
-                    console.warn(`[Phase1] ${p.name}失敗:`, e.message);
-                    return { type: p.type, id: p.id, name: p.name, response: null };
-                }
-            })
-        );
+        // Vercel Edge Function タイムアウト回避のため順次実行
+        const results = [];
+        for (const p of prompts) {
+            try {
+                const raw = await callAPI(p.messages, signal, { jsonMode: false, maxTokens: 1500 });
+                const usage = raw._usage || {}; delete raw._usage;
+                const responseText = raw._text || (typeof raw === 'string' ? raw : JSON.stringify(raw));
+                addLog(
+                    10 + results.length,
+                    `Phase1 — ${p.name}`,
+                    p.messages, { summary: responseText.substring(0, 200) }, usage
+                );
+                results.push({
+                    type: p.type,
+                    id: p.id,
+                    name: p.name,
+                    response: responseText,
+                });
+            } catch (e) {
+                console.warn(`[Phase1] ${p.name}失敗:`, e.message);
+                results.push({ type: p.type, id: p.id, name: p.name, response: null });
+            }
+        }
 
-        return results.map(r => r.status === 'fulfilled' ? r.value : {
-            type: 'task', id: 'error', name: 'エラー', response: null,
-        });
+        return results;
     }
 
     // ===================================================
