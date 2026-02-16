@@ -1072,6 +1072,11 @@
                                         html += `<div class="think"><div class="think-head"><span class="think-chev">▶</span><span class="think-title">🔍 入力分析</span><span class="think-badge">${okCount}/5</span></div><div class="think-body"><div class="think-content">${thinkHtml}</div></div></div>`;
                                     }
 
+                                    // プロセスログ復元
+                                    if (analysisData._processLog?.length) {
+                                        html += buildProcessLogHtml(analysisData._processLog);
+                                    }
+
                                     // 初回分析後のSummaryPreview Vol.1 復元
                                     summaryVolCount++;
                                     const snap1 = snapshotByVol[summaryVolCount];
@@ -1095,6 +1100,11 @@
                                     // ThinkingBlock（文脈推論）
                                     if (analysisData.thinking) {
                                         html += `<div class="think"><div class="think-head"><span class="think-chev">▶</span><span class="think-title">💭 思考プロセス</span></div><div class="think-body"><div class="think-content">${esc(analysisData.thinking)}</div></div></div>`;
+                                    }
+
+                                    // プロセスログ復元
+                                    if (analysisData._processLog?.length) {
+                                        html += buildProcessLogHtml(analysisData._processLog);
                                     }
 
                                     // FeedbackCard
@@ -1282,8 +1292,47 @@
     }
 
     /**
-     * AIプロセスログをthinkingブロックとして表示
-     * リクエスト（システムプロンプト・ユーザーメッセージ）とレスポンスの過程を可視化
+     * プロセスログのHTML文字列を返す（switchThread復元用）
+     */
+    function buildProcessLogHtml(processLog) {
+        if (!processLog || !processLog.length) return '';
+        let inner = '';
+        for (const log of processLog) {
+            inner += `<div style="margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:8px">`;
+            inner += `<div style="font-weight:600;margin-bottom:4px">Step ${log.step}: ${esc(log.label)} <span style="color:var(--sub);font-weight:400">${log.timestamp || ''}</span></div>`;
+            if (log.usage && (log.usage.prompt_tokens || log.usage.completion_tokens)) {
+                inner += `<div style="color:var(--sub);font-size:0.85em;margin-bottom:4px">📊 トークン: 入力=${log.usage.prompt_tokens || '?'} / 出力=${log.usage.completion_tokens || '?'} / 合計=${log.usage.total_tokens || '?'}</div>`;
+            }
+            inner += `<details style="margin:4px 0"><summary style="cursor:pointer;color:var(--accent);font-size:0.9em">📤 リクエスト（メッセージ ${log.request?.messageCount || '?'}件）</summary>`;
+            inner += `<div style="font-size:0.8em;background:var(--card);padding:8px;border-radius:6px;margin-top:4px;max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">`;
+            if (log.request?.systemPrompt) {
+                inner += `<div style="color:var(--sub);margin-bottom:4px">--- system prompt (${log.request.systemPrompt.length}文字) ---</div>`;
+                inner += esc(log.request.systemPrompt.length > 2000 ? log.request.systemPrompt.substring(0, 2000) + '\n...（省略）' : log.request.systemPrompt);
+            }
+            if (log.request?.historyCount > 0) {
+                inner += `<div style="color:var(--sub);margin:4px 0">--- 会話履歴 ${log.request.historyCount}件 ---</div>`;
+            }
+            if (log.request?.userMessage) {
+                inner += `<div style="color:var(--sub);margin:4px 0">--- user message ---</div>`;
+                inner += esc(log.request.userMessage);
+            }
+            inner += `</div></details>`;
+            inner += `<details style="margin:4px 0"><summary style="cursor:pointer;color:var(--accent);font-size:0.9em">📥 レスポンス</summary>`;
+            inner += `<div style="font-size:0.8em;background:var(--card);padding:8px;border-radius:6px;margin-top:4px;max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">`;
+            try {
+                inner += esc(JSON.stringify(log.response, null, 2));
+            } catch (e) {
+                inner += esc('[シリアライズ不可]');
+            }
+            inner += `</div></details>`;
+            inner += `</div>`;
+        }
+        const apiCalls = processLog.length;
+        return `<div class="think"><div class="think-head"><span class="think-chev">▶</span><span class="think-title">🔗 AIプロセスログ</span><span class="think-badge">API ${apiCalls}回</span></div><div class="think-body"><div class="think-content">${inner}</div></div></div>`;
+    }
+
+    /**
+     * AIプロセスログをthinkingブロックとして表示（ライブ用 — DOM直接操作）
      */
     function addProcessLogBlock(processLog) {
         if (!processLog || !processLog.length) return;
