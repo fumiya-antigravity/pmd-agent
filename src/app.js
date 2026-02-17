@@ -821,66 +821,14 @@
        ASPECT CHECK
        ======================================== */
     async function runCheckAspects() {
+        // v6: checkAspectsは廃止。Phase0ループに統合済み。
+        console.warn('[App] checkAspects is deprecated in v6');
         dom.checkBtn.disabled = true;
         dom.checkBtn.textContent = '⏳ チェック中...';
-        state.abortCtrl = new AbortController();
-        showTyping();
-
-        try {
-            const result = await Pipeline.checkAspects(state.aspects, state.abortCtrl.signal);
-            removeTyping();
-
-            if (result.aspectResults) {
-                let html = '';
-                for (const [key, info] of Object.entries(result.aspectResults)) {
-                    const meta = ASPECT_META[key] || { emoji: '📌', label: key };
-                    const dot = info.status === 'ok' ? 'pass' : info.status === 'thin' ? 'warn' : 'fail';
-                    html += `<div class="anal-item"><span class="anal-dot ${dot}"></span>${meta.emoji} ${meta.label}: ${esc(info.feedback)}</div>`;
-                }
-                const okN = Object.values(result.aspectResults).filter(v => v.status === 'ok').length;
-                addThinkingBlock('🔍 観点チェック', html, `${okN}/5`);
-            }
-
-            if (result.suggestedAspects?.length) {
-                const wrap = document.createElement('div');
-                wrap.className = 'chips';
-                result.suggestedAspects.forEach(s => {
-                    const btn = document.createElement('button');
-                    btn.className = 'chip';
-                    btn.textContent = `${s.emoji} ${s.label}を追加`;
-                    btn.addEventListener('click', () => {
-                        ASPECT_META[s.key] = { label: s.label, emoji: s.emoji };
-                        state.aspects[s.key] = '';
-                        createAspectCard(s.key, '');
-                        updateProgress();
-                        addMsg('ai', `${s.emoji} **${s.label}**を追加しました。`);
-                        btn.disabled = true;
-                    });
-                    wrap.appendChild(btn);
-                });
-                dom.chatMessages.appendChild(wrap);
-                scroll();
-            }
-
-            if (result.message) addMsg('ai', result.message);
-
-            if (result.allApproved) {
-                setTimeout(() => {
-                    const p = document.createElement('div');
-                    p.className = 'next-prompt';
-                    p.innerHTML = '✅ 全観点OK — 要件定義書を生成する →';
-                    p.addEventListener('click', () => addMsg('ai', '🎉 すべての観点が整理されました！ 右上の「📄 プレビュー」から確認できます。'));
-                    dom.chatMessages.appendChild(p);
-                    scroll();
-                }, 500);
-            }
-        } catch (err) {
-            removeTyping();
-            if (err.name !== 'AbortError') addMsg('ai', `⚠️ エラー: ${err.message}`, 'warning');
-        }
-
+        removeTyping();
+        appendMessage('ai', '観点チェック機能はPhase0ループに統合されました。');
         dom.checkBtn.disabled = false;
-        dom.checkBtn.textContent = '🔍 観点をチェック';
+        dom.checkBtn.textContent = 'チェック';
     }
 
     /* ========================================

@@ -1,5 +1,5 @@
 /* ===================================================
-   パイプライン v5: Phase0ループアーキテクチャ
+   パイプライン v6: Planner + State Machine アーキテクチャ
 
    設計思想:
    - Planner AI (Phase0) でWhy特化の壁打ち計画を生成
@@ -101,19 +101,6 @@ const Pipeline = (() => {
         parsed._usage = data.usage || {};
         return parsed;
     }
-
-    // ===================================================
-    // PHASE_CHECK: 観点チェック用プロンプト（維持）
-    // ===================================================
-    const PHASE_CHECK = `## 全観点レビュー
-下記の5観点テキストを俯瞰し、status再評価と所見を返せ。
-{
-  "overview": {"overallStatus": "ready|needs_work", "summary": "全体所見"},
-  "aspectResults": {"<key>": {"status": "ok|thin|empty", "feedback": "改善点"}},
-  "suggestedAspects": [{"key": "英語キー", "label": "日本語名", "emoji": "絵文字", "reason": "提案理由"}],
-  "allApproved": true|false,
-  "message": "総合フィードバック（400文字以内）"
-}`;
 
     // ===================================================
     // Planner結果 → UI用フィードバック生成
@@ -320,7 +307,7 @@ const Pipeline = (() => {
     }
 
     // ===================================================
-    // Layer読込ヘルパー
+    // DB読込ヘルパー
     // ===================================================
     async function loadLatestGoal(sessionId) {
         try {
@@ -331,35 +318,5 @@ const Pipeline = (() => {
         }
     }
 
-    async function loadLatestProgress(sessionId) {
-        try {
-            const progress = await SupabaseClient.getLatestProgress(sessionId);
-            return progress?.synthesis_result || null;
-        } catch (e) {
-            console.warn('[Pipeline] Progress読込失敗:', e.message);
-            return null;
-        }
-    }
-
-    // ===================================================
-    // 観点チェック（維持 — v3と同じ）
-    // ===================================================
-    async function checkAspects(aspects, signal) {
-        clearProcessLog();
-        let info = '';
-        for (const [key, text] of Object.entries(aspects)) {
-            info += `### ${key}\n${text || '（空欄）'}\n\n`;
-        }
-        const messages = [
-            { role: 'system', content: RulesLoader.getCore() + '\n\n' + PHASE_CHECK },
-            { role: 'user', content: `## 観点チェック\n\n${info}` },
-        ];
-        const result = await callAPI(messages, signal);
-        const usage = result._usage; delete result._usage;
-        addLog(1, '観点チェック', messages, result, usage);
-        result._processLog = getProcessLog();
-        return result;
-    }
-
-    return { analyzeInitialInput, chat, checkAspects, getProcessLog };
+    return { analyzeInitialInput, chat, getProcessLog };
 })();

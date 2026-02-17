@@ -14,8 +14,7 @@ const IntentCrew = (() => {
      * @returns {Array} メッセージ配列
      */
     function buildInitialMessages(userMessage) {
-        const productMission = RulesLoader.getForPhase0();
-        const prompt = IntentPrompt.buildInitial(productMission);
+        const prompt = IntentPrompt.buildInitial();
 
         return [
             { role: 'system', content: prompt },
@@ -30,9 +29,7 @@ const IntentCrew = (() => {
      * @returns {Array} メッセージ配列
      */
     function buildSessionMessages(userMessage, prevPlan) {
-        const productMission = RulesLoader.getForPhase0();
         const prompt = IntentPrompt.buildSession(
-            productMission,
             prevPlan?.rawGoal || prevPlan?.goal_text || '',
             prevPlan?.sessionPurpose || prevPlan?.session_purpose || '',
             prevPlan?.tasks || [],
