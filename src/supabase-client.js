@@ -236,32 +236,7 @@ const SupabaseClient = (() => {
     }
 
     // ===================================================
-    // User Context CRUD（パーソナリティ蓄積 — Layer2永続部分）
-    // ===================================================
-
-    async function getUserContext(userId = 'default') {
-        const { data, error } = await getClient()
-            .from('user_context')
-            .select('*')
-            .eq('user_id', userId)
-            .maybeSingle();
-        if (error) { console.error('[getUserContext]', error); throw error; }
-        return data;
-    }
-
-    async function upsertUserContext(updates, userId = 'default') {
-        const payload = { user_id: userId, ...updates };
-        const { data, error } = await getClient()
-            .from('user_context')
-            .upsert(payload, { onConflict: 'user_id' })
-            .select()
-            .single();
-        if (error) { console.error('[upsertUserContext]', error); throw error; }
-        return data;
-    }
-
-    // ===================================================
-    // Goal History CRUD（Goal進化の履歴 — Layer2動的部分）
+    // Goal History CRUD（Goal進化の履歴 — State Machine）
     // ===================================================
 
     async function saveGoalHistory(sessionId, turnNumber, goalData) {
@@ -321,38 +296,6 @@ const SupabaseClient = (() => {
     }
 
     // ===================================================
-    // Session Progress CRUD（セッション進捗 — Layer1）
-    // ===================================================
-
-    async function saveSessionProgress(sessionId, turnNumber, progressData) {
-        const { data, error } = await getClient()
-            .from('session_progress')
-            .insert({
-                session_id: sessionId,
-                turn_number: turnNumber,
-                resolved_items: progressData.resolvedItems || [],
-                accumulated_facts: progressData.accumulatedFacts || [],
-                synthesis_result: progressData.synthesisResult || {},
-            })
-            .select()
-            .single();
-        if (error) { console.error('[saveSessionProgress]', error); throw error; }
-        return data;
-    }
-
-    async function getLatestProgress(sessionId) {
-        const { data, error } = await getClient()
-            .from('session_progress')
-            .select('*')
-            .eq('session_id', sessionId)
-            .order('turn_number', { ascending: false })
-            .limit(1)
-            .maybeSingle();
-        if (error) { console.error('[getLatestProgress]', error); throw error; }
-        return data;
-    }
-
-    // ===================================================
     // Public API
     // ===================================================
     return {
@@ -376,15 +319,9 @@ const SupabaseClient = (() => {
         // Aspect Snapshots
         saveSnapshot,
         getSnapshots,
-        // User Context (Layer 2)
-        getUserContext,
-        upsertUserContext,
-        // Goal History (Layer 2)
+        // Goal History (State Machine)
         saveGoalHistory,
         getLatestGoal,
         getGoalHistory,
-        // Session Progress (Layer 1)
-        saveSessionProgress,
-        getLatestProgress,
     };
 })();
