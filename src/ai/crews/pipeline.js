@@ -241,8 +241,14 @@ const Pipeline = (() => {
             ? SynthesisCrew.buildProgressSummary(latestProgress)
             : '';
 
-        // 前回のsessionPurposeを取得
-        const previousSessionPurpose = latestGoal?.session_purpose || latestGoal?.goal_text || '';
+        // 前回のsessionPurposeを取得（session_purposeカラム or gapからのフォールバック）
+        let previousSessionPurpose = latestGoal?.session_purpose || '';
+        if (!previousSessionPurpose && latestGoal?.gap) {
+            // gapに退避保存されたsessionPurposeを復元
+            const match = latestGoal.gap.match(/^\[sessionPurpose\]\s*(.+)/);
+            if (match) previousSessionPurpose = match[1].trim();
+        }
+        if (!previousSessionPurpose) previousSessionPurpose = latestGoal?.goal_text || '';
 
         // ターン番号
         const turnNumber = latestGoal ? (latestGoal.turn_number || 0) + 1 : 1;
