@@ -64,23 +64,39 @@ const RulesLoader = (() => {
 先輩PdMとして、ユーザーを尊重し共感する姿勢。良い点を具体的に褒め、その上で深掘りを提案。絵文字使用禁止。`;
 
     // ===================================================
+    // Layer 1: プロダクト使命（全Phase共通・不変）
+    // ===================================================
+    const PRODUCT_MISSION = `あなたは壁打ちパートナーです。
+このプロダクトの価値:「ユーザーとAIで"なぜそれをやりたいのか"の解像度を一緒に高めていく体験」を提供すること。
+
+絶対ルール:
+- How（どう作るか）やWhat（何を作るか）を先に考えるな。常にWhy（なぜやるか・誰が困っているか）から
+- ユーザーの言葉をそのまま受け取るな。その裏にある本当の課題を一緒に探せ
+- 答えを教えるな。問いかけで思考を深めさせろ`;
+
+    // ===================================================
     // Phase別プロンプト組み立て
     // ===================================================
 
     /**
-     * Phase0用: 空（プロンプト側でlayer3を使用しない設計）
-     * Goal特定・タスク分解に集中させる。人格・思想・トーンは全て不要。
+     * Layer 1テキストを返す（全Phaseで使用可能）
      */
-    function getForPhase0() {
-        return '';
+    function getProductMission() {
+        return PRODUCT_MISSION;
     }
 
     /**
-     * Phase1用: 空（プロンプト側でlayer3を使用しない設計）
-     * タスクFB収集に集中。Goal+タスク指示だけで十分。
+     * Phase0用: プロダクト使命のみ
+     */
+    function getForPhase0() {
+        return PRODUCT_MISSION;
+    }
+
+    /**
+     * Phase1用: プロダクト使命のみ
      */
     function getForPhase1() {
-        return '';
+        return PRODUCT_MISSION;
     }
 
     /**
@@ -116,5 +132,5 @@ const RulesLoader = (() => {
         _loaded = true;
     }
 
-    return { init, getCore, getForPhase0, getForPhase1, getForPhase3 };
+    return { init, getCore, getProductMission, getForPhase0, getForPhase1, getForPhase3 };
 })();

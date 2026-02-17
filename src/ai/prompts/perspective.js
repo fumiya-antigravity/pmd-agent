@@ -2,6 +2,11 @@
    プロンプト: Phase1 — タスク駆動FB収集 + パーソナリティ分析メタタスク
    責務: Phase0のタスク分解から並列APIコール用メッセージを動的生成
 
+   三層GOAL構造:
+   - Layer 1: プロダクト使命（RulesLoader経由）
+   - Layer 2: sessionPurpose（Phase0から — 読み取り専用）
+   - Layer 3: 各タスクの具体指示
+
    ※ 通常タスク: Phase0のtasksから自動生成（可変数）
    ※ メタタスク: パーソナリティ分析（毎回必ず1つ追加）
    =================================================== */
@@ -12,26 +17,23 @@ const PerspectivePrompts = (() => {
     /**
      * タスクごとのFB収集プロンプトを生成
      * @param {Object} task - Phase0で分解されたタスク { id, name, why, doneWhen }
-     * @param {string} layer3 - プロダクト方向性
+     * @param {string} productMission - Layer 1: プロダクト使命
+     * @param {string} sessionPurpose - Layer 2: セッション目的
      * @param {string} goal - Phase0で特定されたGoal
-     * @param {string|null} personality - ユーザーパーソナリティ（短縮版）
      * @param {string|null} progressSummary - セッション進捗
      * @param {string} userMessage - ユーザーの原文
      * @returns {Object} { role, content } のメッセージ配列
      */
-    function buildTaskPrompt(task, layer3, goal, personality, progressSummary, userMessage) {
-        let personalityHint = '';
-        if (personality && personality.trim()) {
-            personalityHint = `
-## ユーザーの傾向（要点のみ）
-${personality.substring(0, 500)}
-`;
-        }
+    function buildTaskPrompt(task, productMission, sessionPurpose, goal, progressSummary, userMessage) {
 
-        const prompt = `## このチャットのGoal
+        const prompt = `## プロダクト使命（不変）
+${productMission}
+
+## このセッションの目的
+${sessionPurpose}
+
+## このチャットのGoal
 ${goal}
-
-${personalityHint}
 
 ${progressSummary ? `## これまでの進捗\n${progressSummary}\n` : ''}
 
@@ -57,12 +59,12 @@ ${progressSummary ? `## これまでの進捗\n${progressSummary}\n` : ''}
 
     /**
      * パーソナリティ分析メタタスクのプロンプトを生成（毎回必ず実行）
-     * @param {string} layer3 - プロダクト方向性
+     * @param {string} productMission - Layer 1: プロダクト使命
      * @param {string|null} existingPersonality - 既存のraw_personality
      * @param {string} userMessage - ユーザーの原文
      * @returns {Object} メッセージ配列
      */
-    function buildPersonalityMetaTask(layer3, existingPersonality, userMessage) {
+    function buildPersonalityMetaTask(productMission, existingPersonality, userMessage) {
         let existingSection = '';
         if (existingPersonality && existingPersonality.trim()) {
             existingSection = `
@@ -79,7 +81,10 @@ ${existingPersonality}
 `;
         }
 
-        const prompt = `${existingSection}
+        const prompt = `## プロダクト使命（不変）
+${productMission}
+
+${existingSection}
 
 ## タスク: ユーザーのパーソナリティ分析
 
@@ -126,15 +131,16 @@ ${existingPersonality}
 
     /**
      * Phase0のタスク分解から、Phase1用の全プロンプトを一括生成
-     * @param {Object} phase0Result - Phase0の結果 { goal, tasks, ... }
-     * @param {string} layer3 - プロダクト方向性
-     * @param {string|null} personality - パーソナリティ
+     * @param {Object} phase0Result - Phase0の結果 { goal, sessionPurpose, tasks, ... }
+     * @param {string} productMission - Layer 1: プロダクト使命
+     * @param {string|null} personality - パーソナリティ（メタタスク用）
      * @param {string|null} progressSummary - セッション進捗
      * @param {string} userMessage - ユーザー原文
      * @returns {Array} [ { type: 'task'|'meta', id, messages } ]
      */
-    function buildAll(phase0Result, layer3, personality, progressSummary, userMessage) {
+    function buildAll(phase0Result, productMission, personality, progressSummary, userMessage) {
         const prompts = [];
+        const sessionPurpose = phase0Result.sessionPurpose || phase0Result.goal;
 
         // 通常タスク（Phase0のtasksから — pendingとnewのみ）
         const activeTasks = (phase0Result.tasks || [])
@@ -147,8 +153,8 @@ ${existingPersonality}
                 id: task.id,
                 name: task.name,
                 messages: buildTaskPrompt(
-                    task, layer3, phase0Result.goal,
-                    personality, progressSummary, userMessage
+                    task, productMission, sessionPurpose, phase0Result.goal,
+                    progressSummary, userMessage
                 ),
             });
         }
@@ -165,7 +171,8 @@ ${existingPersonality}
                         why: 'ユーザーの入力で見落とされている前提や、この計画が失敗するシナリオを特定するため',
                         doneWhen: '見落とされている前提と失敗シナリオが3つ以上特定される',
                     },
-                    layer3, phase0Result.goal, personality, progressSummary, userMessage
+                    productMission, sessionPurpose, phase0Result.goal,
+                    progressSummary, userMessage
                 ),
             });
         }
@@ -175,7 +182,7 @@ ${existingPersonality}
             type: 'meta',
             id: 'personality_analysis',
             name: 'パーソナリティ分析',
-            messages: buildPersonalityMetaTask(layer3, personality, userMessage),
+            messages: buildPersonalityMetaTask(productMission, personality, userMessage),
         });
 
         return prompts;

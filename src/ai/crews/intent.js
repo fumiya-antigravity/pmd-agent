@@ -1,9 +1,11 @@
 /* ===================================================
-   Crew: Phase0 — Goal特定 + タスク分解
-   責務: ユーザー入力からGoal/As-is/Gap/タスクを特定し、
+   Crew: Phase0 — Goal特定 + sessionPurpose + タスク分解
+   責務: ユーザー入力からGoal/sessionPurpose/タスクを特定し、
    Phase1用のタスクリストを生成する
 
-   プロンプト組立: IntentPrompt.buildInitial/buildSession()
+   三層GOAL構造:
+   - Layer 1はRulesLoader.getForPhase0()からプロンプトに注入
+   - Layer 2(sessionPurpose)はこのPhaseの出力に含まれる
    =================================================== */
 
 const IntentCrew = (() => {
@@ -12,12 +14,11 @@ const IntentCrew = (() => {
     /**
      * 初回分析用メッセージ配列を構築
      * @param {string} userMessage - 概要+Why
-     * @param {string|null} personality - user_context.raw_personality
      * @returns {Array} メッセージ配列
      */
-    function buildInitialMessages(userMessage, personality) {
-        const layer3 = RulesLoader.getForPhase0();
-        const prompt = IntentPrompt.buildInitial(layer3, personality);
+    function buildInitialMessages(userMessage) {
+        const productMission = RulesLoader.getForPhase0();
+        const prompt = IntentPrompt.buildInitial(productMission);
 
         return [
             { role: 'system', content: prompt },
@@ -26,18 +27,18 @@ const IntentCrew = (() => {
     }
 
     /**
-     * セッション継続用メッセージ配列を構築（Goal更新判定）
+     * セッション継続用メッセージ配列を構築（sessionPurpose更新判定）
      * @param {string} userMessage - ユーザーの新しい発言
-     * @param {string|null} personality - パーソナリティ
      * @param {string|null} previousGoal - 前回のGoal
+     * @param {string|null} previousSessionPurpose - 前回のsessionPurpose
      * @param {Array|null} previousTasks - 前回のタスク分解
      * @param {string|null} progressSummary - セッション進捗
      * @returns {Array} メッセージ配列
      */
-    function buildSessionMessages(userMessage, personality, previousGoal, previousTasks, progressSummary) {
-        const layer3 = RulesLoader.getForPhase0();
+    function buildSessionMessages(userMessage, previousGoal, previousSessionPurpose, previousTasks, progressSummary) {
+        const productMission = RulesLoader.getForPhase0();
         const prompt = IntentPrompt.buildSession(
-            layer3, personality, previousGoal, previousTasks, progressSummary
+            productMission, previousGoal, previousSessionPurpose, previousTasks, progressSummary
         );
 
         return [
@@ -61,6 +62,13 @@ const IntentCrew = (() => {
         }
         console.log('[IntentCrew] Goal: ' + result.goal.substring(0, 100));
 
+        // sessionPurpose
+        if (!result.sessionPurpose || typeof result.sessionPurpose !== 'string') {
+            console.warn('[IntentCrew] sessionPurposeが未設定、goalをフォールバック');
+            result.sessionPurpose = result.goal;
+        }
+        console.log('[IntentCrew] sessionPurpose: ' + result.sessionPurpose.substring(0, 150));
+
         // asIs
         if (!Array.isArray(result.asIs)) {
             result.asIs = [];
@@ -76,9 +84,9 @@ const IntentCrew = (() => {
             result.tasks = [
                 {
                     id: 'task_default',
-                    name: 'ユーザーのGoalの解像度を上げる',
-                    why: 'Goalの記述が抽象的なため、具体化が必要',
-                    doneWhen: 'Goalに含まれる曖昧な用語が具体的なシーンで説明されている',
+                    name: 'ユーザーのGoalの解像度を上げるために具体的な状況を聞く',
+                    why: 'Goalの記述が抽象的なため、具体的なシーンを確認する必要がある',
+                    doneWhen: 'ユーザーが具体的な場面を1つ以上語れた時',
                     priority: 1,
                 },
             ];

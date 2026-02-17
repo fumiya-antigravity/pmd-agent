@@ -2,15 +2,15 @@
    パイプライン v4: 多段収集・コード統合アーキテクチャ
 
    設計思想:
-   - Phase0: Goal特定+タスク分解 (APIコール1回)
+   - Phase0: Goal特定 + sessionPurpose + タスク分解 (APIコール1回)
    - Phase1: タスク駆動FB収集+メタタスク (並列APIコール)
    - Phase2: コード統合+パーソナリティdiffマージ (APIなし)
    - Phase3: 最終構造化 (APIコール1回)
 
-   3層Context:
-   - Layer3: プロダクト方向性 (RulesLoader — 不変)
-   - Layer2: Goal + パーソナリティ (DB永続 — 動的進化)
-   - Layer1: セッション進捗 (DB蓄積)
+   三層GOAL構造:
+   - Layer1: プロダクト使命 (RulesLoader.getProductMission() — 不変)
+   - Layer2: sessionPurpose (Phase0で設定・更新 — 方向性の心臓部)
+   - Layer3: プロンプトアクション (各API呼出し単位 — 変動)
    =================================================== */
 
 const Pipeline = (() => {
@@ -143,20 +143,22 @@ const Pipeline = (() => {
 
         // --- Layer読込 ---
         const personality = await loadPersonality();
+        const productMission = RulesLoader.getProductMission();
         const turnNumber = 1;
 
-        // === Phase 0: Goal特定 + タスク分解 ===
-        console.log('[Pipeline v4] Phase0: Goal特定');
-        const phase0Messages = IntentCrew.buildInitialMessages(userMessage, personality);
+        // === Phase 0: Goal特定 + sessionPurpose + タスク分解 ===
+        console.log('[Pipeline v4] Phase0: Goal特定 + sessionPurpose');
+        const phase0Messages = IntentCrew.buildInitialMessages(userMessage);
         const phase0Raw = await callAPI(phase0Messages, signal);
         const usage0 = phase0Raw._usage; delete phase0Raw._usage;
         const phase0Result = IntentCrew.parseResult(phase0Raw);
-        addLog(1, 'Phase0 — Goal特定+タスク分解', phase0Messages, phase0Result, usage0);
+        addLog(1, 'Phase0 — Goal特定+sessionPurpose+タスク分解', phase0Messages, phase0Result, usage0);
 
-        // Goal履歴をDB保存
+        // Goal+sessionPurpose履歴をDB保存
         try {
             await SupabaseClient.saveGoalHistory(sessionId, turnNumber, {
                 goal: phase0Result.goal,
+                sessionPurpose: phase0Result.sessionPurpose,
                 tasks: phase0Result.tasks,
                 asIs: phase0Result.asIs,
                 gap: phase0Result.gap,
@@ -166,9 +168,8 @@ const Pipeline = (() => {
 
         // === Phase 1: 並列FB収集 ===
         console.log('[Pipeline v4] Phase1: 並列FB収集');
-        const layer3Phase1 = RulesLoader.getForPhase1();
         const phase1Prompts = PerspectivePrompts.buildAll(
-            phase0Result, layer3Phase1, personality, null, userMessage
+            phase0Result, productMission, personality, null, userMessage
         );
 
         const phase1Results = await runPhase1Parallel(phase1Prompts, signal);
@@ -227,37 +228,48 @@ const Pipeline = (() => {
 
         // --- Layer読込 ---
         const personality = await loadPersonality();
+        const productMission = RulesLoader.getProductMission();
         const latestGoal = sessionId ? await loadLatestGoal(sessionId) : null;
         const latestProgress = sessionId ? await loadLatestProgress(sessionId) : null;
         const progressSummary = latestProgress
             ? SynthesisCrew.buildProgressSummary(latestProgress)
             : '';
 
+        // 前回のsessionPurposeを取得（goal_historyに保存されている）
+        const previousSessionPurpose = latestGoal?.session_purpose || latestGoal?.goal_text || '';
+
         // ターン番号
         const turnNumber = latestGoal ? (latestGoal.turn_number || 0) + 1 : 1;
 
-        // === Phase 0: Goal更新判定 ===
-        console.log('[Pipeline v4] Phase0: Goal更新判定');
+        // === Phase 0: sessionPurpose更新判定 + タスク再分解 ===
+        console.log('[Pipeline v4] Phase0: sessionPurpose更新判定');
         const phase0Messages = IntentCrew.buildSessionMessages(
-            userMessage, personality,
-            latestGoal?.goal_text, latestGoal?.tasks, progressSummary
+            userMessage,
+            latestGoal?.goal_text, previousSessionPurpose,
+            latestGoal?.tasks, progressSummary
         );
         const phase0Raw = await callAPI(phase0Messages, signal);
         const usage0 = phase0Raw._usage; delete phase0Raw._usage;
         const phase0Result = IntentCrew.parseResult(phase0Raw);
-        addLog(1, 'Phase0 — Goal更新判定', phase0Messages, phase0Result, usage0);
+        addLog(1, 'Phase0 — sessionPurpose更新判定', phase0Messages, phase0Result, usage0);
 
+        if (phase0Result.sessionPurposeUpdated) {
+            console.log('[Pipeline v4] sessionPurpose更新: ' + phase0Result.sessionPurpose);
+        }
         if (phase0Result.goalUpdated) {
             console.log('[Pipeline v4] Goal更新: ' + phase0Result.goal);
         }
 
-        // Goal履歴をDB保存
+        // Goal+sessionPurpose履歴をDB保存
         if (sessionId) {
             try {
                 await SupabaseClient.saveGoalHistory(sessionId, turnNumber, {
                     goal: phase0Result.goal,
+                    sessionPurpose: phase0Result.sessionPurpose,
                     goalUpdated: phase0Result.goalUpdated || false,
                     updateReason: phase0Result.updateReason || '',
+                    sessionPurposeUpdated: phase0Result.sessionPurposeUpdated || false,
+                    sessionPurposeUpdateReason: phase0Result.sessionPurposeUpdateReason || '',
                     tasks: phase0Result.tasks,
                     asIs: phase0Result.asIs,
                     gap: phase0Result.gap,
@@ -268,9 +280,8 @@ const Pipeline = (() => {
 
         // === Phase 1: 並列FB収集 ===
         console.log('[Pipeline v4] Phase1: 並列FB収集');
-        const layer3Phase1 = RulesLoader.getForPhase1();
         const phase1Prompts = PerspectivePrompts.buildAll(
-            phase0Result, layer3Phase1, personality, progressSummary, userMessage
+            phase0Result, productMission, personality, progressSummary, userMessage
         );
         const phase1Results = await runPhase1Parallel(phase1Prompts, signal);
 
