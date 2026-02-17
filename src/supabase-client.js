@@ -265,50 +265,37 @@ const SupabaseClient = (() => {
     // ===================================================
 
     async function saveGoalHistory(sessionId, turnNumber, goalData) {
-        // まず新カラム含めてINSERT試行
         const insertData = {
             session_id: sessionId,
             turn_number: turnNumber,
             goal_text: goalData.goal || '',
             goal_updated: goalData.goalUpdated || false,
             update_reason: goalData.updateReason || '',
+            session_purpose: goalData.sessionPurpose || '',
+            session_purpose_updated: goalData.sessionPurposeUpdated || false,
+            session_purpose_update_reason: goalData.sessionPurposeUpdateReason || '',
             tasks: goalData.tasks || [],
             as_is: goalData.asIs || [],
             gap: goalData.gap || '',
             assumptions: goalData.assumptions || [],
+            // State Machine用
+            cognitive_filter: goalData.cognitive_filter || {},
+            current_task_index: goalData.current_task_index || 0,
+            why_completeness_score: goalData.why_completeness_score || 0,
+            abstract_goal: goalData.abstractGoal || '',
         };
 
-        // sessionPurpose関連カラム（DBマイグレーション済みの場合のみ有効）
-        const extendedData = {
-            ...insertData,
-            session_purpose: goalData.sessionPurpose || '',
-            session_purpose_updated: goalData.sessionPurposeUpdated || false,
-            session_purpose_update_reason: goalData.sessionPurposeUpdateReason || '',
-        };
-
-        // 新カラムありで試行 → 失敗したら旧カラムのみでリトライ
-        let result = await getClient()
+        const { data, error } = await getClient()
             .from('goal_history')
-            .insert(extendedData)
+            .insert(insertData)
             .select()
             .single();
 
-        if (result.error) {
-            console.warn('[saveGoalHistory] 拡張カラムで失敗、旧カラムでリトライ:', result.error.message);
-            // sessionPurposeをgap内に退避保存（DBスキーマに依存しない安全策）
-            insertData.gap = `[sessionPurpose] ${goalData.sessionPurpose || ''}\n${goalData.gap || ''}`;
-            result = await getClient()
-                .from('goal_history')
-                .insert(insertData)
-                .select()
-                .single();
+        if (error) {
+            console.error('[saveGoalHistory]', error);
+            throw error;
         }
-
-        if (result.error) {
-            console.error('[saveGoalHistory]', result.error);
-            throw result.error;
-        }
-        return result.data;
+        return data;
     }
 
     async function getLatestGoal(sessionId) {

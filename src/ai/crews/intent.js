@@ -1,11 +1,8 @@
 /* ===================================================
-   Crew: Phase0 — Goal特定 + sessionPurpose + タスク分解
-   責務: ユーザー入力からGoal/sessionPurpose/タスクを特定し、
-   Phase1用のタスクリストを生成する
-
-   三層GOAL構造:
-   - Layer 1はRulesLoader.getForPhase0()からプロンプトに注入
-   - Layer 2(sessionPurpose)はこのPhaseの出力に含まれる
+   Crew: Planner AI — Why特化の壁打ち計画
+   責務: ユーザー入力から壁打ち計画を生成
+   
+   新JSON構造: cognitive_filter → current_state → core_purpose → tasks
    =================================================== */
 
 const IntentCrew = (() => {
@@ -27,18 +24,21 @@ const IntentCrew = (() => {
     }
 
     /**
-     * セッション継続用メッセージ配列を構築（sessionPurpose更新判定）
+     * Turn2+: 前回のPlan引き継ぎ + ユーザー回答判定
      * @param {string} userMessage - ユーザーの新しい発言
-     * @param {string|null} previousGoal - 前回のGoal
-     * @param {string|null} previousSessionPurpose - 前回のsessionPurpose
-     * @param {Array|null} previousTasks - 前回のタスク分解
-     * @param {string|null} progressSummary - セッション進捗
+     * @param {Object} prevPlan - 前回のPlan全体（DB保存形式）
      * @returns {Array} メッセージ配列
      */
-    function buildSessionMessages(userMessage, previousGoal, previousSessionPurpose, previousTasks, progressSummary) {
+    function buildSessionMessages(userMessage, prevPlan) {
         const productMission = RulesLoader.getForPhase0();
         const prompt = IntentPrompt.buildSession(
-            productMission, previousGoal, previousSessionPurpose, previousTasks, progressSummary
+            productMission,
+            prevPlan?.rawGoal || prevPlan?.goal_text || '',
+            prevPlan?.sessionPurpose || prevPlan?.session_purpose || '',
+            prevPlan?.tasks || [],
+            prevPlan?.cognitive_filter || {},
+            prevPlan?.why_completeness_score || 0,
+            prevPlan?.current_task_index || 0
         );
 
         return [
@@ -48,68 +48,100 @@ const IntentCrew = (() => {
     }
 
     /**
-     * Phase0の結果をパース・検証
+     * Planner結果をパース・検証・正規化
+     * LLMの新JSON構造 → DB保存/UI表示互換形式に変換
      * @param {Object} result - APIレスポンスのパース結果
-     * @returns {Object} 検証済みのPhase0結果
+     * @returns {Object} 正規化されたPlanner結果
      */
     function parseResult(result) {
-        console.log('[IntentCrew] Phase0結果パース');
+        console.log('[Planner] 結果パース開始');
 
-        // goal
-        if (!result.goal || typeof result.goal !== 'string') {
-            console.warn('[IntentCrew] goalが未設定、フォールバック');
-            result.goal = '不明';
+        // === cognitive_filter ===
+        const cf = result.cognitive_filter || {};
+        if (!Array.isArray(cf.detected_how_what)) cf.detected_how_what = [];
+        console.log('[Planner] cognitive_filter: How/What ' + cf.detected_how_what.length + '語検出');
+        console.log('[Planner]   除外語: ' + cf.detected_how_what.join(', '));
+
+        // === current_state ===
+        const cs = result.current_state || {};
+        if (!Array.isArray(cs.asIs)) cs.asIs = [];
+        if (!Array.isArray(cs.assumptions)) cs.assumptions = [];
+        console.log('[Planner] asIs: ' + cs.asIs.length + '件, assumptions: ' + cs.assumptions.length + '件');
+
+        // === core_purpose ===
+        const cp = result.core_purpose || {};
+        if (!cp.rawGoal || typeof cp.rawGoal !== 'string') {
+            console.warn('[Planner] rawGoalが未設定、フォールバック');
+            cp.rawGoal = '不明';
         }
-        console.log('[IntentCrew] Goal: ' + result.goal.substring(0, 100));
-
-        // sessionPurpose
-        if (!result.sessionPurpose || typeof result.sessionPurpose !== 'string') {
-            console.warn('[IntentCrew] sessionPurposeが未設定、goalをフォールバック');
-            result.sessionPurpose = result.goal;
+        if (!cp.abstractGoal) cp.abstractGoal = cp.rawGoal;
+        if (!cp.sessionPurpose) {
+            console.warn('[Planner] sessionPurposeが未設定、abstractGoalをフォールバック');
+            cp.sessionPurpose = cp.abstractGoal;
         }
-        console.log('[IntentCrew] sessionPurpose: ' + result.sessionPurpose.substring(0, 150));
+        if (typeof cp.why_completeness_score !== 'number') cp.why_completeness_score = 0;
+        console.log('[Planner] rawGoal: ' + cp.rawGoal.substring(0, 100));
+        console.log('[Planner] abstractGoal: ' + cp.abstractGoal.substring(0, 100));
+        console.log('[Planner] sessionPurpose: ' + cp.sessionPurpose.substring(0, 150));
+        console.log('[Planner] why_completeness_score: ' + cp.why_completeness_score + '%');
 
-        // asIs
-        if (!Array.isArray(result.asIs)) {
-            result.asIs = [];
-        }
-        console.log('[IntentCrew] As-is: ' + result.asIs.length + '項目');
-
-        // gap
-        if (!result.gap) result.gap = '';
-
-        // tasks
+        // === tasks ===
         if (!Array.isArray(result.tasks) || result.tasks.length === 0) {
-            console.warn('[IntentCrew] tasksが空、デフォルトタスク生成');
+            console.warn('[Planner] tasksが空、デフォルトタスク生成');
             result.tasks = [
                 {
-                    id: 'task_default',
-                    name: 'ユーザーのGoalの解像度を上げるために具体的な状況を聞く',
-                    why: 'Goalの記述が抽象的なため、具体的なシーンを確認する必要がある',
-                    doneWhen: 'ユーザーが具体的な場面を1つ以上語れた時',
-                    priority: 1,
+                    step: 1,
+                    name: 'そもそもなぜこれをやりたいと思ったのか、そのきっかけとなった具体的な出来事を聞く',
+                    why: '動機が不明なため。手段ではなく原体験を聞くことでWhyの解像度を上げる',
+                    forbidden_words: [],
+                    doneWhen: 'ユーザーが具体的なエピソード（日時・場面・相手）を1つ以上語った時',
                 },
             ];
         }
 
-        // tasks: id/priority/status補完
+        // tasks: step/forbidden_words/status補完
         result.tasks.forEach((task, i) => {
-            if (!task.id) task.id = `task_${i + 1}`;
-            if (!task.priority) task.priority = i + 1;
-            if (!task.name) task.name = `タスク${i + 1}`;
+            if (!task.step) task.step = i + 1;
+            if (!task.id) task.id = `task_${task.step}`;
+            if (!task.name) task.name = `タスク${task.step}`;
             if (!task.why) task.why = '';
             if (!task.doneWhen) task.doneWhen = '';
+            if (!Array.isArray(task.forbidden_words)) task.forbidden_words = [];
             if (!task.status) task.status = 'pending';
             if (!task.retryReason) task.retryReason = '';
+            // priority互換: stepをpriorityとして使用
+            task.priority = task.step;
         });
 
-        console.log('[IntentCrew] タスク: ' + result.tasks.length + '件');
+        console.log('[Planner] タスク: ' + result.tasks.length + '件');
         result.tasks.forEach(t => {
-            const statusIcon = t.status === 'done' ? '✓' : t.status === 'retry' ? '↻' : t.status === 'new' ? '+' : '…';
-            console.log(`  [${t.id}] p${t.priority} ${statusIcon} ${t.name}`);
+            const icon = t.status === 'done' ? '✓' : t.status === 'retry' ? '↻' : t.status === 'new' ? '+' : '…';
+            console.log(`  [step ${t.step}] ${icon} ${t.name}`);
         });
 
-        return result;
+        // === 正規化: DB保存/UI表示互換のフラット構造に変換 ===
+        const normalized = {
+            // cognitive_filter（そのまま保持 — DB JSONB保存）
+            cognitive_filter: cf,
+            // core_purpose フラット化
+            rawGoal: cp.rawGoal,
+            abstractGoal: cp.abstractGoal,
+            goal: cp.rawGoal,  // DB互換: goal_text
+            sessionPurpose: cp.sessionPurpose,
+            sessionPurposeUpdated: cp.sessionPurposeUpdated || false,
+            sessionPurposeUpdateReason: cp.sessionPurposeUpdateReason || '',
+            rawGoalUpdated: cp.rawGoalUpdated || false,
+            why_completeness_score: cp.why_completeness_score,
+            // current_state フラット化
+            asIs: cs.asIs,
+            assumptions: cs.assumptions,
+            // tasks（そのまま）
+            tasks: result.tasks,
+            // gap互換: scoreベースで生成
+            gap: `why_completeness: ${cp.why_completeness_score}%`,
+        };
+
+        return normalized;
     }
 
     return { buildInitialMessages, buildSessionMessages, parseResult };

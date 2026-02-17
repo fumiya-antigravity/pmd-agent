@@ -2,14 +2,10 @@
    パイプライン v5: Phase0ループアーキテクチャ
 
    設計思想:
-   - Phase0のみでWhyの深掘り質問を生成
-   - Phase0結果をmessageに変換してUIに直接フィードバック
-   - ユーザー回答 → Phase0再実行 → の繰り返し
-
-   三層GOAL構造:
-   - Layer1: プロダクト使命 (RulesLoader.getProductMission() — 不変)
-   - Layer2: sessionPurpose (Phase0で設定・更新 — 方向性の心臓部)
-   - Layer3: プロンプトアクション (各API呼出し単位 — 変動)
+   - Planner AI (Phase0) でWhy特化の壁打ち計画を生成
+   - State Machine: current_task_index + cognitive_filter + why_completeness_score
+   - DB: AI→プログラム→DB→AI（AIへの伝言ゲーム排除）
+   - 将来: Interviewer + Critic Gatekeeper で自律ループ
    =================================================== */
 
 const Pipeline = (() => {
@@ -120,21 +116,26 @@ const Pipeline = (() => {
 }`;
 
     // ===================================================
-    // Phase0結果 → UI用フィードバック生成
+    // Planner結果 → UI用フィードバック生成
     // ===================================================
     function buildPhase0FeedbackResult(phase0Result) {
-        // Phase0のtasksから自然言語の深掘り質問を生成
-        const activeTasks = (phase0Result.tasks || [])
-            .filter(t => t.status !== 'done')
-            .sort((a, b) => (a.priority || 99) - (b.priority || 99));
+        const tasks = phase0Result.tasks || [];
+        const score = phase0Result.why_completeness_score || 0;
+
+        // 現在のタスクインデックスに基づいて表示するタスクを決定
+        // Turn1: 最初のタスクのみ表示
+        // Turn2+: done/retryの判定結果 + 次タスク
+        const activeTasks = tasks.filter(t => t.status !== 'done');
+        const retryTasks = activeTasks.filter(t => t.status === 'retry');
+        const pendingTasks = activeTasks.filter(t => t.status === 'pending' || t.status === 'new');
 
         let message = '';
 
-        // retryタスクがある場合（的外れ検知）
-        const retryTasks = activeTasks.filter(t => t.status === 'retry');
-        const pendingTasks = activeTasks.filter(t => t.status !== 'retry');
+        // Why解像度スコア表示
+        message += `**Why解像度: ${score}%**\n\n`;
 
         if (retryTasks.length > 0) {
+            // retryタスク（前回の回答が不十分）
             message += 'もう少し深掘りさせてください。\n\n';
             retryTasks.forEach(t => {
                 message += `**${t.name}**`;
@@ -143,30 +144,30 @@ const Pipeline = (() => {
                 }
                 message += '\n\n';
             });
+        } else if (pendingTasks.length > 0) {
+            // 次のペンディングタスク（1つだけ表示 — North Star Injectorの思想）
+            const nextTask = pendingTasks[0];
+            message += `**${nextTask.name}**\n`;
+            if (nextTask.why) message += `→ ${nextTask.why}\n`;
+            message += '\n';
+            if (pendingTasks.length > 1) {
+                message += `（他${pendingTasks.length - 1}件の深掘りポイントもあります）\n`;
+            }
+        } else {
+            message += 'Whyの深掘りが完了しました。次のフェーズに進む準備ができています。\n';
         }
 
-        if (pendingTasks.length > 0) {
-            if (retryTasks.length > 0) {
-                message += 'また、以下も聞かせてください。\n\n';
-            } else {
-                message += 'いくつか深掘りしたいポイントがあります。\n\n';
-            }
-            pendingTasks.slice(0, 3).forEach(t => {
-                message += `**${t.name}**\n`;
-                if (t.why) message += `→ ${t.why}\n`;
-                message += '\n';
-            });
-            if (pendingTasks.length > 3) {
-                message += `（他${pendingTasks.length - 3}件の深掘りポイントもあります）\n`;
-            }
-        }
-
-        if (!message) {
+        if (!message.trim()) {
             message = 'もう少し詳しく教えてください。';
         }
 
-        // thinking: Goal + sessionPurposeの要約
-        const thinking = `Goal: ${phase0Result.goal || '未特定'}\nsessionPurpose: ${phase0Result.sessionPurpose || '未設定'}`;
+        // thinking: 内部情報（折りたたみ表示）
+        const thinking = [
+            `abstractGoal: ${phase0Result.abstractGoal || '未特定'}`,
+            `sessionPurpose: ${phase0Result.sessionPurpose || '未設定'}`,
+            `why_completeness_score: ${score}%`,
+            `cognitive_filter: ${(phase0Result.cognitive_filter?.detected_how_what || []).join(', ')}`,
+        ].join('\n');
 
         return {
             message: message.trim(),
@@ -175,126 +176,146 @@ const Pipeline = (() => {
             aspectUpdates: {},
             contamination: { detected: false, items: [] },
             crossCheck: { redundancy: { detected: false, pairs: [] }, logicChain: { connected: true } },
-            // Phase0詳細
+            // Planner詳細
             _v4: {
                 goal: phase0Result.goal,
+                abstractGoal: phase0Result.abstractGoal,
                 sessionPurpose: phase0Result.sessionPurpose,
                 tasks: phase0Result.tasks,
                 asIs: phase0Result.asIs,
-                gap: phase0Result.gap,
                 assumptions: phase0Result.assumptions,
+                cognitive_filter: phase0Result.cognitive_filter,
+                why_completeness_score: score,
             },
         };
     }
 
     // ===================================================
-    // パイプライン: 初回分析 (Phase0のみ)
+    // パイプライン: 初回分析 (Planner Turn1)
     // ===================================================
     async function analyzeInitialInput(overview, whyText, sessionId, signal) {
-        console.log('[Pipeline v5] === 初回分析開始 ===');
+        console.log('[Pipeline v6] === 初回分析開始 ===');
         clearProcessLog();
 
         const userMessage = `## 概要\n${overview}\n\n## Why\n${whyText}`;
         const turnNumber = 1;
 
-        // === Phase 0: Goal特定 + sessionPurpose + タスク分解 ===
-        console.log('[Pipeline v5] Phase0: Goal特定 + sessionPurpose');
-        const phase0Messages = IntentCrew.buildInitialMessages(userMessage);
-        const phase0Raw = await callAPI(phase0Messages, signal);
-        const usage0 = phase0Raw._usage; delete phase0Raw._usage;
-        const phase0Result = IntentCrew.parseResult(phase0Raw);
-        addLog(1, 'Phase0 — Goal特定+sessionPurpose+タスク分解', phase0Messages, phase0Result, usage0);
+        // === Planner AI: 壁打ち計画生成 ===
+        console.log('[Pipeline v6] Planner: cognitive_filter → current_state → core_purpose → tasks');
+        const plannerMessages = IntentCrew.buildInitialMessages(userMessage);
+        const plannerRaw = await callAPI(plannerMessages, signal);
+        const usage = plannerRaw._usage; delete plannerRaw._usage;
+        const plan = IntentCrew.parseResult(plannerRaw);
+        addLog(1, 'Planner — 壁打ち計画生成', plannerMessages, plan, usage);
 
-        // Goal+sessionPurpose履歴をDB保存
+        // State Machine: 計画全体をDB保存
         try {
             await SupabaseClient.saveGoalHistory(sessionId, turnNumber, {
-                goal: phase0Result.goal,
-                sessionPurpose: phase0Result.sessionPurpose,
-                tasks: phase0Result.tasks,
-                asIs: phase0Result.asIs,
-                gap: phase0Result.gap,
-                assumptions: phase0Result.assumptions,
+                goal: plan.goal,
+                sessionPurpose: plan.sessionPurpose,
+                tasks: plan.tasks,
+                asIs: plan.asIs,
+                gap: plan.gap,
+                assumptions: plan.assumptions,
+                // State Machine用
+                cognitive_filter: plan.cognitive_filter,
+                current_task_index: 0,
+                why_completeness_score: plan.why_completeness_score,
+                abstractGoal: plan.abstractGoal,
             });
-        } catch (e) { console.warn('[Pipeline] Goal保存失敗:', e.message); }
+            console.log('[Pipeline v6] State保存成功: index=0, score=' + plan.why_completeness_score + '%');
+        } catch (e) { console.warn('[Pipeline] State保存失敗:', e.message); }
 
-        // Phase0結果からUI用フィードバックを生成
-        const finalResult = buildPhase0FeedbackResult(phase0Result);
+        // Planner結果からUI用フィードバックを生成
+        const finalResult = buildPhase0FeedbackResult(plan);
         finalResult._processLog = getProcessLog();
 
-        console.log('[Pipeline v5] === 初回分析完了 ===');
+        console.log('[Pipeline v6] === 初回分析完了 ===');
         return finalResult;
     }
 
     // ===================================================
-    // パイプライン: 壁打ちチャット (Phase0ループ)
+    // パイプライン: 壁打ちチャット (Planner Turn2+ State Machine)
     // ===================================================
     async function chat(userMessage, context, signal) {
-        console.log('[Pipeline v5] === チャット開始 ===');
+        console.log('[Pipeline v6] === チャット開始 ===');
         clearProcessLog();
 
         const sessionId = context?.sessionId;
 
-        // --- 前回の状態読込 ---
-        const latestGoal = sessionId ? await loadLatestGoal(sessionId) : null;
-        const latestProgress = sessionId ? await loadLatestProgress(sessionId) : null;
-        const progressSummary = latestProgress
-            ? SynthesisCrew.buildProgressSummary(latestProgress)
-            : '';
+        // --- State Machine: 前回のPlan全体を読込 ---
+        const prevState = sessionId ? await loadLatestGoal(sessionId) : null;
+        console.log('[Pipeline v6] 前回State:', prevState ? `turn=${prevState.turn_number}, index=${prevState.current_task_index || 0}` : 'なし');
 
-        // 前回のsessionPurposeを取得（session_purposeカラム or gapからのフォールバック）
-        let previousSessionPurpose = latestGoal?.session_purpose || '';
-        if (!previousSessionPurpose && latestGoal?.gap) {
-            // gapに退避保存されたsessionPurposeを復元
-            const match = latestGoal.gap.match(/^\[sessionPurpose\]\s*(.+)/);
-            if (match) previousSessionPurpose = match[1].trim();
-        }
-        if (!previousSessionPurpose) previousSessionPurpose = latestGoal?.goal_text || '';
+        // 前回のPlanをprevPlanオブジェクトに組み立て（DB→AI伝達）
+        const prevPlan = prevState ? {
+            rawGoal: prevState.goal_text || '',
+            sessionPurpose: prevState.session_purpose || '',
+            tasks: prevState.tasks || [],
+            cognitive_filter: prevState.cognitive_filter || {},
+            why_completeness_score: prevState.why_completeness_score || 0,
+            current_task_index: prevState.current_task_index || 0,
+            asIs: prevState.as_is || [],
+            assumptions: prevState.assumptions || [],
+        } : null;
 
         // ターン番号
-        const turnNumber = latestGoal ? (latestGoal.turn_number || 0) + 1 : 1;
+        const turnNumber = prevState ? (prevState.turn_number || 0) + 1 : 1;
 
-        // === Phase 0: sessionPurpose更新判定 + タスク再分解 ===
-        console.log('[Pipeline v5] Phase0: sessionPurpose更新判定');
-        const phase0Messages = IntentCrew.buildSessionMessages(
-            userMessage,
-            latestGoal?.goal_text, previousSessionPurpose,
-            latestGoal?.tasks, progressSummary
-        );
-        const phase0Raw = await callAPI(phase0Messages, signal);
-        const usage0 = phase0Raw._usage; delete phase0Raw._usage;
-        const phase0Result = IntentCrew.parseResult(phase0Raw);
-        addLog(1, 'Phase0 — sessionPurpose更新判定', phase0Messages, phase0Result, usage0);
+        // === Planner AI: Turn2+ — status判定 + 再計画 ===
+        console.log('[Pipeline v6] Planner Turn2+: status判定 + 再計画');
+        const plannerMessages = IntentCrew.buildSessionMessages(userMessage, prevPlan);
+        const plannerRaw = await callAPI(plannerMessages, signal);
+        const usage = plannerRaw._usage; delete plannerRaw._usage;
+        const plan = IntentCrew.parseResult(plannerRaw);
+        addLog(1, 'Planner — status判定+再計画', plannerMessages, plan, usage);
 
-        if (phase0Result.sessionPurposeUpdated) {
-            console.log('[Pipeline v5] sessionPurpose更新: ' + phase0Result.sessionPurpose);
+        // State Machine: current_task_indexを更新
+        const prevIndex = prevPlan?.current_task_index || 0;
+        let newIndex = prevIndex;
+        if (plan.tasks && plan.tasks[prevIndex]?.status === 'done') {
+            newIndex = prevIndex + 1;
+            console.log('[Pipeline v6] タスク完了: index ' + prevIndex + ' → ' + newIndex);
+        } else if (plan.tasks && plan.tasks[prevIndex]?.status === 'retry') {
+            console.log('[Pipeline v6] タスクretry: index ' + prevIndex + ' に留まる');
         }
-        if (phase0Result.goalUpdated) {
-            console.log('[Pipeline v5] Goal更新: ' + phase0Result.goal);
+
+        if (plan.sessionPurposeUpdated) {
+            console.log('[Pipeline v6] sessionPurpose更新: ' + plan.sessionPurpose);
+        }
+        if (plan.rawGoalUpdated) {
+            console.log('[Pipeline v6] Goal更新: ' + plan.goal);
         }
 
-        // Goal+sessionPurpose履歴をDB保存
+        // State Machine: Plan全体をDB保存
         if (sessionId) {
             try {
                 await SupabaseClient.saveGoalHistory(sessionId, turnNumber, {
-                    goal: phase0Result.goal,
-                    sessionPurpose: phase0Result.sessionPurpose,
-                    goalUpdated: phase0Result.goalUpdated || false,
-                    updateReason: phase0Result.updateReason || '',
-                    sessionPurposeUpdated: phase0Result.sessionPurposeUpdated || false,
-                    sessionPurposeUpdateReason: phase0Result.sessionPurposeUpdateReason || '',
-                    tasks: phase0Result.tasks,
-                    asIs: phase0Result.asIs,
-                    gap: phase0Result.gap,
-                    assumptions: phase0Result.assumptions,
+                    goal: plan.goal,
+                    sessionPurpose: plan.sessionPurpose,
+                    goalUpdated: plan.rawGoalUpdated || false,
+                    updateReason: '',
+                    sessionPurposeUpdated: plan.sessionPurposeUpdated || false,
+                    sessionPurposeUpdateReason: plan.sessionPurposeUpdateReason || '',
+                    tasks: plan.tasks,
+                    asIs: plan.asIs,
+                    gap: plan.gap,
+                    assumptions: plan.assumptions,
+                    // State Machine用
+                    cognitive_filter: plan.cognitive_filter,
+                    current_task_index: newIndex,
+                    why_completeness_score: plan.why_completeness_score,
+                    abstractGoal: plan.abstractGoal,
                 });
-            } catch (e) { console.warn('[Pipeline] Goal保存失敗:', e.message); }
+                console.log('[Pipeline v6] State保存成功: index=' + newIndex + ', score=' + plan.why_completeness_score + '%');
+            } catch (e) { console.warn('[Pipeline] State保存失敗:', e.message); }
         }
 
-        // Phase0結果からUI用フィードバックを生成
-        const finalResult = buildPhase0FeedbackResult(phase0Result);
+        // Planner結果からUI用フィードバックを生成
+        const finalResult = buildPhase0FeedbackResult(plan);
         finalResult._processLog = getProcessLog();
 
-        console.log('[Pipeline v5] === チャット完了 ===');
+        console.log('[Pipeline v6] === チャット完了 ===');
         return finalResult;
     }
 
