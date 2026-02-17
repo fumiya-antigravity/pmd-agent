@@ -92,18 +92,21 @@ const IntentCrew = (() => {
             ];
         }
 
-        // tasks: id/priority補完
+        // tasks: id/priority/status補完
         result.tasks.forEach((task, i) => {
             if (!task.id) task.id = `task_${i + 1}`;
             if (!task.priority) task.priority = i + 1;
             if (!task.name) task.name = `タスク${i + 1}`;
             if (!task.why) task.why = '';
             if (!task.doneWhen) task.doneWhen = '';
+            if (!task.status) task.status = 'pending';
+            if (!task.retryReason) task.retryReason = '';
         });
 
         console.log('[IntentCrew] タスク: ' + result.tasks.length + '件');
         result.tasks.forEach(t => {
-            console.log(`  [${t.id}] p${t.priority}: ${t.name}`);
+            const statusIcon = t.status === 'done' ? '✓' : t.status === 'retry' ? '↻' : t.status === 'new' ? '+' : '…';
+            console.log(`  [${t.id}] p${t.priority} ${statusIcon} ${t.name}`);
         });
 
         return result;

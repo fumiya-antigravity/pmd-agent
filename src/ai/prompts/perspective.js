@@ -1,14 +1,12 @@
 /* ===================================================
-   プロンプト: Phase1 — タスク駆動FB収集 + パーソナリティ分析メタタスク
-   責務: Phase0のタスク分解から並列APIコール用メッセージを動的生成
+   プロンプト: Phase1 — タスク駆動FB収集
+   ※ Pipeline v5ではPhase0ループのため、このファイルは現在未使用
+   ※ 将来Phase1を復活させる場合に備えて保持
 
    三層GOAL構造:
    - Layer 1: プロダクト使命（RulesLoader経由）
    - Layer 2: sessionPurpose（Phase0から — 読み取り専用）
    - Layer 3: 各タスクの具体指示
-
-   ※ 通常タスク: Phase0のtasksから自動生成（可変数）
-   ※ メタタスク: パーソナリティ分析（毎回必ず1つ追加）
    =================================================== */
 
 const PerspectivePrompts = (() => {
@@ -131,18 +129,12 @@ ${existingSection}
 
     /**
      * Phase0のタスク分解から、Phase1用の全プロンプトを一括生成
-     * @param {Object} phase0Result - Phase0の結果 { goal, sessionPurpose, tasks, ... }
-     * @param {string} productMission - Layer 1: プロダクト使命
-     * @param {string|null} personality - パーソナリティ（メタタスク用）
-     * @param {string|null} progressSummary - セッション進捗
-     * @param {string} userMessage - ユーザー原文
-     * @returns {Array} [ { type: 'task'|'meta', id, messages } ]
+     * ※ Pipeline v5では未使用（Phase0ループのため）
      */
-    function buildAll(phase0Result, productMission, personality, progressSummary, userMessage) {
+    function buildAll(phase0Result, productMission, progressSummary, userMessage) {
         const prompts = [];
         const sessionPurpose = phase0Result.sessionPurpose || phase0Result.goal;
 
-        // 通常タスク（Phase0のtasksから — pendingとnewのみ）
         const activeTasks = (phase0Result.tasks || [])
             .filter(t => !t.status || t.status !== 'done')
             .sort((a, b) => (a.priority || 99) - (b.priority || 99));
@@ -159,34 +151,8 @@ ${existingSection}
             });
         }
 
-        // タスクが少ない場合の補完
-        if (activeTasks.length < 2) {
-            prompts.push({
-                type: 'task',
-                id: 'supplement_blind_spots',
-                name: '見落とし分析',
-                messages: buildTaskPrompt(
-                    {
-                        name: '見落とし・盲点の分析',
-                        why: 'ユーザーの入力で見落とされている前提や、この計画が失敗するシナリオを特定するため',
-                        doneWhen: '見落とされている前提と失敗シナリオが3つ以上特定される',
-                    },
-                    productMission, sessionPurpose, phase0Result.goal,
-                    progressSummary, userMessage
-                ),
-            });
-        }
-
-        // ★ パーソナリティ分析メタタスク（常に追加）
-        prompts.push({
-            type: 'meta',
-            id: 'personality_analysis',
-            name: 'パーソナリティ分析',
-            messages: buildPersonalityMetaTask(productMission, personality, userMessage),
-        });
-
         return prompts;
     }
 
-    return { buildTaskPrompt, buildPersonalityMetaTask, buildAll };
+    return { buildTaskPrompt, buildAll };
 })();

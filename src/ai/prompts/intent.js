@@ -130,9 +130,24 @@ ${progressSummary || 'まだ進捗なし'}
 - ユーザーが方向転換した場合のみ更新
 
 ### 3. タスク分解の更新 — Whyの深掘りに特化
-- 前回のタスクで完了したものはどれか（ユーザーの回答で情報が得られたか）→ status: "done"
-- 新たに深掘りすべき「なぜ」が出てきたか → 新タスク追加
-- 次にユーザーに聞くべき「なぜ」はどれか
+
+各タスクについて以下の4段階で判定:
+- **done**: ユーザーがdoneWhen条件を満たす回答をした → 完了
+- **retry**: ユーザーが回答したが、的外れ or 表層的。**角度を変えて再度聞く** → retryReasonにずれの内容を記載し、nameを新しい問い方に書き換えよ
+- **pending**: まだ聞いていない
+- **new**: 今回のやりとりで新たに必要になった深掘り
+
+#### 的外れ回答の典型パターン
+- 「なぜ？」と聞いたのに「何を（How/What）」で答えている → retry
+  例: 「なぜ作りたい？」→「ChatGPTはコンテキスト忘れる」（= ツール不満 ≠ 動機）
+- 抽象的すぎて解像度が上がっていない → retry
+  例: 「もっと効率化したい」（= 元と同じ解像度）
+- 質問を飛ばして別の話をしている → retryまたは新タスク
+
+#### retryの聞き直しテクニック
+- 視点を変える:「ツールの不満は分かった。一歩引いて、そもそもなぜ壁打ちが必要か？」
+- 具体化を促す:「"効率化"とは、具体的にどの作業がどう変わること？」
+- 逆説で聞く:「もしこれを作らなかったら、1年後どうなっている？」
 
 タスクの方向性（この3つだけ）:
 1. **なぜ?**: なぜこれをやりたいのか。動機・きっかけ
@@ -150,20 +165,21 @@ ${progressSummary || 'まだ進捗なし'}
   "goal": "現在のGoal",
   "goalUpdated": true/false,
   "updateReason": "Goal更新理由（更新時のみ）",
-  "sessionPurpose": "現在のsessionPurpose",
+  "sessionPurpose": "現在のsessionPurpose（アウトカム記述）",
   "sessionPurposeUpdated": true/false,
   "sessionPurposeUpdateReason": "更新理由（更新時のみ）",
-  "asIs": ["更新されたAs-is"],
+  "asIs": ["更新されたAs-is（新事実を追加）"],
   "assumptions": ["仮定リスト"],
-  "gap": "残りのGap",
+  "gap": "残りのWhyの解像度が低い箇所",
   "tasks": [
     {
       "id": "task_1",
-      "name": "ユーザーに何を聞くか",
-      "why": "なぜ必要か",
+      "name": "ユーザーに何を聞くか（retryの場合は新しい問い方）",
+      "why": "なぜこの深掘りが必要か",
       "doneWhen": "完了条件",
       "priority": 1,
-      "status": "done|pending|new"
+      "status": "done|retry|pending|new",
+      "retryReason": "retryの場合のみ: なぜ前回の回答では不十分だったか"
     }
   ],
   "onTrack": true/false,
