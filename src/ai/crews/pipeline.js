@@ -1,11 +1,11 @@
 /* ===================================================
-   パイプライン v6: Planner + State Machine アーキテクチャ
+   パイプライン v7: Planner + Interviewer アーキテクチャ
 
    設計思想:
-   - Planner AI (Phase0) でWhy特化の壁打ち計画を生成
+   - Planner AI（裏方）: Why特化の壁打ち計画をJSON生成 → UIに出さない
+   - Interviewer AI（表舞台）: PlannerのJSONを基に自然な会話テキスト生成
    - State Machine: current_task_index + cognitive_filter + why_completeness_score
    - DB: AI→プログラム→DB→AI（AIへの伝言ゲーム排除）
-   - 将来: Interviewer + Critic Gatekeeper で自律ループ
    =================================================== */
 
 const Pipeline = (() => {
@@ -103,57 +103,30 @@ const Pipeline = (() => {
     }
 
     // ===================================================
-    // Planner結果 → UI用フィードバック生成
+    // Planner結果 + Interviewerテキスト → UI用フィードバック生成
     // ===================================================
-    function buildPhase0FeedbackResult(phase0Result) {
-        const tasks = phase0Result.tasks || [];
+    function buildPhase0FeedbackResult(phase0Result, interviewerText) {
         const score = phase0Result.why_completeness_score || 0;
 
-        // 現在のタスクインデックスに基づいて表示するタスクを決定
-        // Turn1: 最初のタスクのみ表示
-        // Turn2+: done/retryの判定結果 + 次タスク
-        const activeTasks = tasks.filter(t => t.status !== 'done');
-        const retryTasks = activeTasks.filter(t => t.status === 'retry');
-        const pendingTasks = activeTasks.filter(t => t.status === 'pending' || t.status === 'new');
+        // Interviewerの自然テキストをそのままmessageに
+        const message = interviewerText || 'もう少し詳しく教えてください。';
 
-        let message = '';
+        // thinking: Plannerの裏情報（折りたたみ表示用）
+        const tasks = phase0Result.tasks || [];
+        const tasksSummary = tasks.map(t => {
+            const icon = t.status === 'done' ? '✓' : t.status === 'retry' ? '↻' : '…';
+            return `  ${icon} [step ${t.step}] ${t.name}`;
+        }).join('\n');
 
-        // Why解像度スコア表示
-        message += `**Why解像度: ${score}%**\n\n`;
-
-        if (retryTasks.length > 0) {
-            // retryタスク（前回の回答が不十分）
-            message += 'もう少し深掘りさせてください。\n\n';
-            retryTasks.forEach(t => {
-                message += `**${t.name}**`;
-                if (t.retryReason) {
-                    message += `\n（${t.retryReason}）`;
-                }
-                message += '\n\n';
-            });
-        } else if (pendingTasks.length > 0) {
-            // 次のペンディングタスク（1つだけ表示 — North Star Injectorの思想）
-            const nextTask = pendingTasks[0];
-            message += `**${nextTask.name}**\n`;
-            if (nextTask.why) message += `→ ${nextTask.why}\n`;
-            message += '\n';
-            if (pendingTasks.length > 1) {
-                message += `（他${pendingTasks.length - 1}件の深掘りポイントもあります）\n`;
-            }
-        } else {
-            message += 'Whyの深掘りが完了しました。次のフェーズに進む準備ができています。\n';
-        }
-
-        if (!message.trim()) {
-            message = 'もう少し詳しく教えてください。';
-        }
-
-        // thinking: 内部情報（折りたたみ表示）
         const thinking = [
             `abstractGoal: ${phase0Result.abstractGoal || '未特定'}`,
             `sessionPurpose: ${phase0Result.sessionPurpose || '未設定'}`,
             `why_completeness_score: ${score}%`,
             `cognitive_filter: ${(phase0Result.cognitive_filter?.detected_how_what || []).join(', ')}`,
+            `current_task_index: ${phase0Result.current_task_index || 0}`,
+            `assumptions: ${(phase0Result.assumptions || []).join(' / ')}`,
+            `--- タスク一覧 ---`,
+            tasksSummary,
         ].join('\n');
 
         return {
@@ -163,7 +136,7 @@ const Pipeline = (() => {
             aspectUpdates: {},
             contamination: { detected: false, items: [] },
             crossCheck: { redundancy: { detected: false, pairs: [] }, logicChain: { connected: true } },
-            // Planner詳細
+            // Planner詳細（デバッグ用・折りたたみ内）
             _v4: {
                 goal: phase0Result.goal,
                 abstractGoal: phase0Result.abstractGoal,
@@ -181,19 +154,20 @@ const Pipeline = (() => {
     // パイプライン: 初回分析 (Planner Turn1)
     // ===================================================
     async function analyzeInitialInput(overview, whyText, sessionId, signal) {
-        console.log('[Pipeline v6] === 初回分析開始 ===');
+        console.log('[Pipeline v7] === 初回分析開始 ===');
         clearProcessLog();
 
         const userMessage = `## 概要\n${overview}\n\n## Why\n${whyText}`;
         const turnNumber = 1;
 
-        // === Planner AI: 壁打ち計画生成 ===
-        console.log('[Pipeline v6] Planner: cognitive_filter → current_state → core_purpose → tasks');
+        // === Step 1: Planner AI — 壁打ち計画生成（裏方） ===
+        console.log('[Pipeline v7] Step1: Planner — cognitive_filter → current_state → core_purpose → tasks');
         const plannerMessages = IntentCrew.buildInitialMessages(userMessage);
         const plannerRaw = await callAPI(plannerMessages, signal);
-        const usage = plannerRaw._usage; delete plannerRaw._usage;
+        const plannerUsage = plannerRaw._usage; delete plannerRaw._usage;
         const plan = IntentCrew.parseResult(plannerRaw);
-        addLog(1, 'Planner — 壁打ち計画生成', plannerMessages, plan, usage);
+        plan.current_task_index = 0;
+        addLog(1, 'Planner — 壁打ち計画生成', plannerMessages, plan, plannerUsage);
 
         // State Machine: 計画全体をDB保存
         try {
@@ -204,20 +178,27 @@ const Pipeline = (() => {
                 asIs: plan.asIs,
                 gap: plan.gap,
                 assumptions: plan.assumptions,
-                // State Machine用
                 cognitive_filter: plan.cognitive_filter,
                 current_task_index: 0,
                 why_completeness_score: plan.why_completeness_score,
                 abstractGoal: plan.abstractGoal,
             });
-            console.log('[Pipeline v6] State保存成功: index=0, score=' + plan.why_completeness_score + '%');
+            console.log('[Pipeline v7] State保存成功: index=0, score=' + plan.why_completeness_score + '%');
         } catch (e) { console.warn('[Pipeline] State保存失敗:', e.message); }
 
-        // Planner結果からUI用フィードバックを生成
-        const finalResult = buildPhase0FeedbackResult(plan);
+        // === Step 2: Interviewer AI — 自然な会話テキスト生成（表舞台） ===
+        console.log('[Pipeline v7] Step2: Interviewer — 自然な会話テキスト生成');
+        const interviewerMessages = InterviewerCrew.buildInitialMessages(plan, userMessage);
+        const interviewerRaw = await callAPI(interviewerMessages, signal, { jsonMode: false, maxTokens: 1000 });
+        const interviewerUsage = interviewerRaw._usage; delete interviewerRaw._usage;
+        const interviewerText = interviewerRaw._text || '';
+        addLog(2, 'Interviewer — 会話テキスト生成', interviewerMessages, { text: interviewerText }, interviewerUsage);
+
+        // Interviewer結果からUI用フィードバックを生成
+        const finalResult = buildPhase0FeedbackResult(plan, interviewerText);
         finalResult._processLog = getProcessLog();
 
-        console.log('[Pipeline v6] === 初回分析完了 ===');
+        console.log('[Pipeline v7] === 初回分析完了 ===');
         return finalResult;
     }
 
@@ -225,14 +206,14 @@ const Pipeline = (() => {
     // パイプライン: 壁打ちチャット (Planner Turn2+ State Machine)
     // ===================================================
     async function chat(userMessage, context, signal) {
-        console.log('[Pipeline v6] === チャット開始 ===');
+        console.log('[Pipeline v7] === チャット開始 ===');
         clearProcessLog();
 
         const sessionId = context?.sessionId;
 
         // --- State Machine: 前回のPlan全体を読込 ---
         const prevState = sessionId ? await loadLatestGoal(sessionId) : null;
-        console.log('[Pipeline v6] 前回State:', prevState ? `turn=${prevState.turn_number}, index=${prevState.current_task_index || 0}` : 'なし');
+        console.log('[Pipeline v7] 前回State:', prevState ? `turn=${prevState.turn_number}, index=${prevState.current_task_index || 0}` : 'なし');
 
         // 前回のPlanをprevPlanオブジェクトに組み立て（DB→AI伝達）
         const prevPlan = prevState ? {
@@ -249,29 +230,31 @@ const Pipeline = (() => {
         // ターン番号
         const turnNumber = prevState ? (prevState.turn_number || 0) + 1 : 1;
 
-        // === Planner AI: Turn2+ — status判定 + 再計画 ===
-        console.log('[Pipeline v6] Planner Turn2+: status判定 + 再計画');
+        // === Step 1: Planner AI — status判定 + 再計画（裏方） ===
+        console.log('[Pipeline v7] Step1: Planner — status判定 + 再計画');
         const plannerMessages = IntentCrew.buildSessionMessages(userMessage, prevPlan);
         const plannerRaw = await callAPI(plannerMessages, signal);
-        const usage = plannerRaw._usage; delete plannerRaw._usage;
+        const plannerUsage = plannerRaw._usage; delete plannerRaw._usage;
         const plan = IntentCrew.parseResult(plannerRaw);
-        addLog(1, 'Planner — status判定+再計画', plannerMessages, plan, usage);
+        addLog(1, 'Planner — status判定+再計画', plannerMessages, plan, plannerUsage);
 
         // State Machine: current_task_indexを更新
         const prevIndex = prevPlan?.current_task_index || 0;
         let newIndex = prevIndex;
         if (plan.tasks && plan.tasks[prevIndex]?.status === 'done') {
             newIndex = prevIndex + 1;
-            console.log('[Pipeline v6] タスク完了: index ' + prevIndex + ' → ' + newIndex);
+            console.log('[Pipeline v7] タスク完了: index ' + prevIndex + ' → ' + newIndex);
         } else if (plan.tasks && plan.tasks[prevIndex]?.status === 'retry') {
-            console.log('[Pipeline v6] タスクretry: index ' + prevIndex + ' に留まる');
+            console.log('[Pipeline v7] タスクretry: index ' + prevIndex + ' に留まる');
         }
 
+        plan.current_task_index = newIndex;
+
         if (plan.sessionPurposeUpdated) {
-            console.log('[Pipeline v6] sessionPurpose更新: ' + plan.sessionPurpose);
+            console.log('[Pipeline v7] sessionPurpose更新: ' + plan.sessionPurpose);
         }
         if (plan.rawGoalUpdated) {
-            console.log('[Pipeline v6] Goal更新: ' + plan.goal);
+            console.log('[Pipeline v7] Goal更新: ' + plan.goal);
         }
 
         // State Machine: Plan全体をDB保存
@@ -288,21 +271,28 @@ const Pipeline = (() => {
                     asIs: plan.asIs,
                     gap: plan.gap,
                     assumptions: plan.assumptions,
-                    // State Machine用
                     cognitive_filter: plan.cognitive_filter,
                     current_task_index: newIndex,
                     why_completeness_score: plan.why_completeness_score,
                     abstractGoal: plan.abstractGoal,
                 });
-                console.log('[Pipeline v6] State保存成功: index=' + newIndex + ', score=' + plan.why_completeness_score + '%');
+                console.log('[Pipeline v7] State保存成功: index=' + newIndex + ', score=' + plan.why_completeness_score + '%');
             } catch (e) { console.warn('[Pipeline] State保存失敗:', e.message); }
         }
 
-        // Planner結果からUI用フィードバックを生成
-        const finalResult = buildPhase0FeedbackResult(plan);
+        // === Step 2: Interviewer AI — 自然な会話テキスト生成（表舞台） ===
+        console.log('[Pipeline v7] Step2: Interviewer — 自然な会話テキスト生成');
+        const interviewerMessages = InterviewerCrew.buildSessionMessages(plan, userMessage);
+        const interviewerRaw = await callAPI(interviewerMessages, signal, { jsonMode: false, maxTokens: 1000 });
+        const interviewerUsage = interviewerRaw._usage; delete interviewerRaw._usage;
+        const interviewerText = interviewerRaw._text || '';
+        addLog(2, 'Interviewer — 会話テキスト生成', interviewerMessages, { text: interviewerText }, interviewerUsage);
+
+        // Interviewer結果からUI用フィードバックを生成
+        const finalResult = buildPhase0FeedbackResult(plan, interviewerText);
         finalResult._processLog = getProcessLog();
 
-        console.log('[Pipeline v6] === チャット完了 ===');
+        console.log('[Pipeline v7] === チャット完了 ===');
         return finalResult;
     }
 
