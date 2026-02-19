@@ -628,6 +628,7 @@ function buildDebug(plan, mgr) {
         mgu: plan.main_goal_understanding, sqc: plan.sub_question_clarity,
         question_type: plan.question_type, session_purpose: plan.sessionPurpose,
         manager_alignment_score: mgr?.alignment_score || 100,
+        current_focus: plan.current_focus,
         question_tree: plan.question_tree, cognitive_filter: plan.cognitive_filter,
     };
 }
