@@ -100,9 +100,10 @@ Whyの解像度を100%に近づけるため、ユーザーの前提を崩す深�
   /**
    * Turn 2+: 前回のPlan引き継ぎ + ユーザー回答のstatus判定
    */
-  function buildSession(previousRawGoal, previousSessionPurpose, previousTasks, previousCognitiveFilter, previousScore, currentTaskIndex) {
+  function buildSession(previousRawGoal, previousSessionPurpose, previousTasks, previousCognitiveFilter, previousScore, currentTaskIndex, answeredTasksSummary) {
     const tasksJson = JSON.stringify(previousTasks || [], null, 2);
     const filterJson = JSON.stringify(previousCognitiveFilter || {}, null, 2);
+    const answeredContext = answeredTasksSummary || '（まだ回答なし）';
 
     return `# 役割とミッション
 あなたは、妥協を許さない冷酷かつ優秀な「壁打ちパートナー（Planner AI）」です。
@@ -129,6 +130,10 @@ ${filterJson}
 ## 前回のタスク
 ${tasksJson}
 
+## これまでのスライダー回答（構造化済み）
+${answeredContext}
+※ 数値が高いほど「その仮説への同意度が高い」ことを示す。70%以上は「確認された痛み」として扱え。
+
 # あなたのタスク
 ユーザーの新しい発言を踏まえ、以下の思考プロセスで推論せよ。
 
@@ -138,11 +143,13 @@ ${tasksJson}
 ## 2. current_state（更新）
 前回のasIsに新たな事実を追加。assumptionsも更新（揺さぶりが成功して崩れた前提があれば除外）。
 
-## 3. core_purpose（更新判定）
+## 3. core_purpose（毎ターン必ず更新）
 - \`rawGoal\`: ユーザーが方向転換した場合のみ更新
 - \`abstractGoal\`: rawGoalからHow/What除去した純粋な欲求
-- \`sessionPurpose\`: 解像度が上がった場合のみ更新。更新理由も記載
-- \`why_completeness_score\`: ユーザーの回答を踏まえて再採点（前回: ${previousScore || 0}）
+- \`sessionPurpose\`: **【必須】** 上記「スライダー回答」を踏まえ、毎ターン必ず再評価・具体化せよ。
+  - 70%以上の仮説は「確認された痛み」として必ず sessionPurpose に組み込む。
+  - 「〇〇が原因で、〇〇という人が、〇〇という苦痛を抱えている状態」という事実ベースで記述。ポエム禁止。
+- \`why_completeness_score\`: 今回の回答で判明した事実を踏まえ再採点（前回: ${previousScore || 0}）
 
 ## 4. tasks — ステータス判定 + 再計画
 

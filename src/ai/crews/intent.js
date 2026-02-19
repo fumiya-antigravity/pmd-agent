@@ -29,13 +29,20 @@ const IntentCrew = (() => {
      * @returns {Array} メッセージ配列
      */
     function buildSessionMessages(userMessage, prevPlan) {
+        // 回答済みタスクのサマリーを生成（構造化された回答のみ抽出）
+        const answeredSummary = (prevPlan?.tasks || [])
+            .filter(t => t.result && typeof t.result === 'object' && Object.keys(t.result).length > 0)
+            .map(t => `- Step${t.step} "${t.name}": ${JSON.stringify(t.result)}`)
+            .join('\n') || null;
+
         const prompt = IntentPrompt.buildSession(
             prevPlan?.rawGoal || prevPlan?.goal_text || '',
             prevPlan?.sessionPurpose || prevPlan?.session_purpose || '',
             prevPlan?.tasks || [],
             prevPlan?.cognitive_filter || {},
             prevPlan?.why_completeness_score || 0,
-            prevPlan?.current_task_index || 0
+            prevPlan?.current_task_index || 0,
+            answeredSummary  // ← 追加: スライダー回答の構造化サマリー
         );
 
         return [

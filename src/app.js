@@ -720,7 +720,10 @@
             }
 
             // アキネーター形式スライダーUI
-            if (result.uiOptions && result.uiOptions.length > 0) {
+            if (result.isCompleted && result.completionData) {
+                // 完了: まとめカードを表示し、スライダーは表示しない
+                renderCompletionCard(result.completionData);
+            } else if (result.uiOptions && result.uiOptions.length > 0) {
                 renderSliderForm(result.uiOptions);
             }
 
@@ -1272,6 +1275,41 @@
             addMsg('user', answerText);
             startDelayedSend(answerText);
         });
+    }
+
+    /**
+     * Whyの深掘り完了時に表示するまとめカードを生成
+     * @param {{ sessionPurpose, abstractGoal, why_completeness_score, doneTasks }} data
+     */
+    function renderCompletionCard(data) {
+        const card = document.createElement('div');
+        card.className = 'completion-card';
+
+        // 回答結果のサマリー: 最高値の仮説をピックアップ
+        const doneSummary = (data.doneTasks || []).map(t => {
+            const entries = Object.entries(t.result || {});
+            if (entries.length === 0) return '';
+            const [topLabel, topVal] = entries.sort(([, a], [, b]) => b - a)[0];
+            return `<li><span class="comp-q">${esc(t.question.replace(/\（.*?\）/g, '').trim())}</span> &rarr; <strong>${esc(topLabel)}（${topVal}%）</strong></li>`;
+        }).filter(Boolean).join('');
+
+        card.innerHTML = `
+            <div class="completion-header">🎯 Whyの深掘り完了</div>
+            <div class="completion-section">
+                <div class="completion-label">明らかになった真の目的</div>
+                <div class="completion-purpose">${esc(data.sessionPurpose || data.abstractGoal || '（特定中）')}</div>
+            </div>
+            ${doneSummary ? `
+            <div class="completion-section">
+                <div class="completion-label">発見した痛み（回答要約）</div>
+                <ul class="completion-results">${doneSummary}</ul>
+            </div>` : ''}
+            <div class="completion-footer">Why解像度: ${data.why_completeness_score || 0}%</div>
+        `;
+
+        dom.chatMessages.appendChild(card);
+        scroll();
+        console.log('[renderCompletionCard] 完了カード表示: score=' + data.why_completeness_score);
     }
 
     function addMsg(role, content, type) {

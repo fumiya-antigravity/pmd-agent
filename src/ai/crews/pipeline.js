@@ -49,6 +49,27 @@ const Pipeline = (() => {
     }
 
     // ===================================================
+    // スライダー回答パーサー
+    // ===================================================
+    /**
+     * ユーザーのスライダー回答テキストを構造化オブジェクトに変換
+     * 例: "[回答] 仮説A: 80%, 仮説B: 20%" → { "仮説A": 80, "仮説B": 20 }
+     */
+    function parseSliderAnswer(text) {
+        if (!text || !text.startsWith('[回答]')) return null;
+        const result = {};
+        const pattern = /([^:,\[\]]+):\s*(\d+)%/g;
+        let match;
+        while ((match = pattern.exec(text)) !== null) {
+            const label = match[1].trim();
+            if (label && label !== '回答') {
+                result[label] = parseInt(match[2], 10);
+            }
+        }
+        return Object.keys(result).length > 0 ? result : null;
+    }
+
+    // ===================================================
     // API呼出し（共通基盤）
     // ===================================================
     async function callAPI(messages, signal, options = {}) {
@@ -107,14 +128,19 @@ const Pipeline = (() => {
     // ===================================================
     function buildPhase0FeedbackResult(phase0Result, interviewerText) {
         const score = phase0Result.why_completeness_score || 0;
+        const tasks = phase0Result.tasks || [];
+        const currentIndex = phase0Result.current_task_index || 0;
+
+        // 完了判定: tasksの末尾が status:"completed" か、scoreが80以上か
+        const lastTask = tasks[tasks.length - 1];
+        const isCompleted = lastTask?.status === 'completed' || score >= 80;
 
         // Interviewerの自然テキストをそのままmessageに
         const message = interviewerText || 'もう少し詳しく教えてください。';
 
         // thinking: Plannerの裏情報（折りたたみ表示用）
-        const tasks = phase0Result.tasks || [];
         const tasksSummary = tasks.map(t => {
-            const icon = t.status === 'done' ? '✓' : t.status === 'retry' ? '↻' : '…';
+            const icon = t.status === 'done' ? '✓' : t.status === 'completed' ? '🎯' : t.status === 'retry' ? '↻' : '…';
             return `  ${icon} [step ${t.step}] ${t.name}`;
         }).join('\n');
 
@@ -123,11 +149,26 @@ const Pipeline = (() => {
             `sessionPurpose: ${phase0Result.sessionPurpose || '未設定'}`,
             `why_completeness_score: ${score}%`,
             `cognitive_filter: ${(phase0Result.cognitive_filter?.detected_how_what || []).join(', ')}`,
-            `current_task_index: ${phase0Result.current_task_index || 0}`,
+            `current_task_index: ${currentIndex}`,
             `assumptions: ${(phase0Result.assumptions || []).join(' / ')}`,
+            `completed: ${isCompleted}`,
             `--- タスク一覧 ---`,
             tasksSummary,
         ].join('\n');
+
+        // completionData: 完了時にUIへ渡す構造化サマリー
+        const doneTasks = tasks.filter(t => t.status === 'done');
+        const completionData = isCompleted ? {
+            sessionPurpose: phase0Result.sessionPurpose || phase0Result.abstractGoal || '',
+            abstractGoal: phase0Result.abstractGoal || '',
+            why_completeness_score: score,
+            doneTasks: doneTasks.map(t => ({
+                step: t.step,
+                question: t.name,
+                options: t.options || [],
+                result: t.result || {},
+            })),
+        } : null;
 
         return {
             message: message.trim(),
@@ -147,9 +188,12 @@ const Pipeline = (() => {
                 cognitive_filter: phase0Result.cognitive_filter,
                 why_completeness_score: score,
             },
-            // アキネーター形式対応: 現在のタスクのoptionsをUIへ
-            uiOptions: (tasks[phase0Result.current_task_index || 0] || {}).options || [],
-            uiQuestionType: (tasks[phase0Result.current_task_index || 0] || {}).question_type || 'scale',
+            // アキネーター形式対応: 完了なら空配列、未完了は現在タスクのoptions
+            uiOptions: isCompleted ? [] : (tasks[currentIndex] || {}).options || [],
+            uiQuestionType: isCompleted ? null : (tasks[currentIndex] || {}).question_type || 'scale',
+            // 完了フラグ＋サマリー
+            isCompleted,
+            completionData,
         };
     }
 
@@ -229,6 +273,16 @@ const Pipeline = (() => {
             asIs: prevState.as_is || [],
             assumptions: prevState.assumptions || [],
         } : null;
+
+        // === スライダー回答のパースと構造化 ===
+        if (prevPlan && userMessage && userMessage.startsWith('[回答]')) {
+            const sliderResult = parseSliderAnswer(userMessage);
+            const taskIdx = prevPlan.current_task_index || 0;
+            if (sliderResult && prevPlan.tasks[taskIdx]) {
+                prevPlan.tasks[taskIdx].result = sliderResult;
+                console.log('[Pipeline v7] スライダー回答を構造化:', JSON.stringify(sliderResult));
+            }
+        }
 
         // ターン番号
         const turnNumber = prevState ? (prevState.turn_number || 0) + 1 : 1;
