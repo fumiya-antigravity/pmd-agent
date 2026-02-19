@@ -243,7 +243,7 @@ const SupabaseClient = (() => {
         const insertData = {
             session_id: sessionId,
             turn_number: turnNumber,
-            goal_text: goalData.goal || '',
+            goal_text: goalData.goal || goalData.sessionPurpose || '',
             goal_updated: goalData.goalUpdated || false,
             update_reason: goalData.updateReason || '',
             session_purpose: goalData.sessionPurpose || '',
@@ -258,6 +258,15 @@ const SupabaseClient = (() => {
             current_task_index: goalData.current_task_index || 0,
             why_completeness_score: goalData.why_completeness_score || 0,
             abstract_goal: goalData.abstractGoal || '',
+            // CLARIX v3 追加カラム
+            mgu: goalData.main_goal_understanding || goalData.mgu || 0,
+            sqc: goalData.sub_question_clarity || goalData.sqc || 0,
+            question_type: goalData.question_type || 'open',
+            manager_alignment_score: goalData.manager_alignment_score || 100,
+            active_sub_questions: goalData.active_sub_questions || [],
+            turn: goalData.turn ?? turnNumber,
+            raw_planner_output: goalData.raw_planner_output || null,
+            raw_manager_output: goalData.raw_manager_output || null,
         };
 
         const { data, error } = await getClient()
@@ -296,6 +305,107 @@ const SupabaseClient = (() => {
     }
 
     // ===================================================
+    // Session Anchors CRUD【CLARIX v3】
+    // ===================================================
+
+    async function createSessionAnchor(sessionId, { original_message, core_keywords = [], initial_purpose = '' }) {
+        const { data, error } = await getClient()
+            .from('session_anchors')
+            .insert({
+                session_id: sessionId,
+                original_message,
+                core_keywords,
+                initial_purpose,
+            })
+            .select()
+            .single();
+        if (error) { console.error('[createSessionAnchor]', error); throw error; }
+        console.log('[createSessionAnchor] 作成:', sessionId);
+        return data;
+    }
+
+    async function getSessionAnchor(sessionId) {
+        const { data, error } = await getClient()
+            .from('session_anchors')
+            .select('*')
+            .eq('session_id', sessionId)
+            .maybeSingle();
+        if (error) { console.error('[getSessionAnchor]', error); throw error; }
+        return data;
+    }
+
+    // ===================================================
+    // Confirmed Insights CRUD【CLARIX v3】
+    // ===================================================
+
+    async function upsertConfirmedInsight(sessionId, insight) {
+        const { data, error } = await getClient()
+            .from('confirmed_insights')
+            .upsert({
+                session_id: sessionId,
+                label: insight.label,
+                layer: insight.layer,
+                strength: insight.strength || 50,
+                confirmation_strength: insight.confirmation_strength ?? null,
+                tag: (insight.strength || 50) >= 70 ? 'primary' : 'supplementary',
+                turn: insight.turn || 0,
+            }, { onConflict: 'session_id,label' })
+            .select()
+            .single();
+        if (error) { console.error('[upsertConfirmedInsight]', error); throw error; }
+        return data;
+    }
+
+    async function getConfirmedInsights(sessionId) {
+        const { data, error } = await getClient()
+            .from('confirmed_insights')
+            .select('*')
+            .eq('session_id', sessionId)
+            .order('strength', { ascending: false });
+        if (error) { console.error('[getConfirmedInsights]', error); throw error; }
+        return data || [];
+    }
+
+    async function updateInsightSliderWeight(insightId, sliderWeight) {
+        const { data, error } = await getClient()
+            .from('confirmed_insights')
+            .update({ slider_weight: sliderWeight })
+            .eq('id', insightId)
+            .select()
+            .single();
+        if (error) { console.error('[updateInsightSliderWeight]', error); throw error; }
+        return data;
+    }
+
+    // ===================================================
+    // Reports CRUD【CLARIX v3】
+    // ===================================================
+
+    async function createReport(sessionId, reportMarkdown, sessionPurpose = '') {
+        const { data, error } = await getClient()
+            .from('reports')
+            .upsert({
+                session_id: sessionId,
+                report_markdown: reportMarkdown,
+                session_purpose: sessionPurpose,
+            }, { onConflict: 'session_id' })
+            .select()
+            .single();
+        if (error) { console.error('[createReport]', error); throw error; }
+        return data;
+    }
+
+    async function getReport(sessionId) {
+        const { data, error } = await getClient()
+            .from('reports')
+            .select('*')
+            .eq('session_id', sessionId)
+            .maybeSingle();
+        if (error) { console.error('[getReport]', error); throw error; }
+        return data;
+    }
+
+    // ===================================================
     // Public API
     // ===================================================
     return {
@@ -323,5 +433,15 @@ const SupabaseClient = (() => {
         saveGoalHistory,
         getLatestGoal,
         getGoalHistory,
+        // Session Anchors (CLARIX v3)
+        createSessionAnchor,
+        getSessionAnchor,
+        // Confirmed Insights (CLARIX v3)
+        upsertConfirmedInsight,
+        getConfirmedInsights,
+        updateInsightSliderWeight,
+        // Reports (CLARIX v3)
+        createReport,
+        getReport,
     };
 })();

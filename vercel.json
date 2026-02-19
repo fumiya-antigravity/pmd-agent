@@ -6,6 +6,14 @@
     "rewrites": [
         {
             "source": "/",
+            "destination": "/public/clarix.html"
+        },
+        {
+            "source": "/clarix",
+            "destination": "/public/clarix.html"
+        },
+        {
+            "source": "/v2",
             "destination": "/public/index.html"
         },
         {

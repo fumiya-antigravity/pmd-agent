@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="CLARIX - Why Discovery Engine: あなたの「なぜ」を深掘りするAI壁打ちアシスタント">
+    <title>CLARIX — Why Discovery Engine</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/public/clarix.css">
+</head>
+
+<body>
+    <!-- ===== サイドバー ===== -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <h1 class="logo">
+                <span class="logo-icon">◆</span>
+                CLARIX
+            </h1>
+            <p class="logo-sub">Why Discovery Engine</p>
+        </div>
+        <button class="new-session-btn" id="newSessionBtn">
+            <span>＋</span> 新しい壁打ち
+        </button>
+        <div class="session-list" id="sessionList"></div>
+        <div class="sidebar-footer">
+            <div class="debug-toggle">
+                <label><input type="checkbox" id="debugToggle"> デバッグ表示</label>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ===== メインエリア ===== -->
+    <main class="main-area" id="mainArea">
+
+        <!-- Phase: WELCOME -->
+        <section class="phase welcome-phase" id="phaseWelcome">
+            <div class="welcome-content">
+                <div class="welcome-icon">◆</div>
+                <h2>CLARIX</h2>
+                <p class="welcome-sub">あなたの「なぜ」を一緒に探しましょう</p>
+                <p class="welcome-desc">解決したい課題、気になっていること、<br>なんでも話しかけてください。</p>
+            </div>
+        </section>
+
+        <!-- Phase: CONVERSATION -->
+        <section class="phase conversation-phase" id="phaseConversation" style="display: none;">
+            <div class="chat-messages" id="chatMessages"></div>
+            <!-- デバッグパネル -->
+            <div class="debug-panel" id="debugPanel" style="display: none;">
+                <div class="debug-grid">
+                    <div class="debug-item">
+                        <span class="debug-label">MGU</span>
+                        <span class="debug-value" id="debugMgu">0</span>
+                    </div>
+                    <div class="debug-item">
+                        <span class="debug-label">SQC</span>
+                        <span class="debug-value" id="debugSqc">0</span>
+                    </div>
+                    <div class="debug-item">
+                        <span class="debug-label">Type</span>
+                        <span class="debug-value" id="debugType">-</span>
+                    </div>
+                    <div class="debug-item">
+                        <span class="debug-label">Turn</span>
+                        <span class="debug-value" id="debugTurn">0</span>
+                    </div>
+                    <div class="debug-item" style="grid-column: span 2;">
+                        <span class="debug-label">Purpose</span>
+                        <span class="debug-value" id="debugPurpose">-</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Phase: SLIDER -->
+        <section class="phase slider-phase" id="phaseSlider" style="display: none;">
+            <div class="slider-container">
+                <div class="slider-header-section">
+                    <h2>🎯 インサイトの重み付け</h2>
+                    <p class="slider-desc">あなたにとって重要と感じるものを調整してください</p>
+                    <p class="session-purpose" id="sliderPurpose"></p>
+                </div>
+                <div class="slider-items" id="sliderItems"></div>
+                <div class="slider-actions">
+                    <button class="btn-secondary" id="sliderBackBtn">← 会話に戻る</button>
+                    <button class="btn-primary" id="sliderSubmitBtn">レポートを生成 →</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Phase: REPORT -->
+        <section class="phase report-phase" id="phaseReport" style="display: none;">
+            <div class="report-container">
+                <div class="report-header">
+                    <h2>📄 Why レポート</h2>
+                    <button class="btn-secondary" id="reportNewBtn">新しい壁打ちを始める</button>
+                </div>
+                <div class="report-content" id="reportContent"></div>
+            </div>
+        </section>
+
+        <!-- 入力エリア (WELCOME + CONVERSATION 共通) -->
+        <div class="input-area" id="inputArea">
+            <div class="input-wrapper">
+                <textarea id="userInput" placeholder="相談したいことを入力してください..." rows="1"></textarea>
+                <button class="send-btn" id="sendBtn" disabled>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- ローディング -->
+        <div class="loading-overlay" id="loadingOverlay" style="display: none;">
+            <div class="loading-spinner"></div>
+            <p class="loading-text">AIが考え中...</p>
+        </div>
+    </main>
+
+    <!-- Supabase CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+    <!-- Marked.js (Markdown rendering) -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="/src/supabase-client.js"></script>
+    <script src="/src/ai/crews/pipeline_v3.js"></script>
+    <script src="/src/ai/crews/synthesizer.js"></script>
+    <script src="/src/ai/prompts/planner.js"></script>
+    <script src="/src/ai/prompts/manager.js"></script>
+    <script src="/src/ai/prompts/interviewer_v3.js"></script>
+    <script src="/src/ai/prompts/reporter.js"></script>
+    <script src="/public/app_v3.js"></script>
+</body>
+
+</html>
