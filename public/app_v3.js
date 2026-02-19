@@ -120,11 +120,8 @@ const ClarixApp = (() => {
     // ===================================================
     async function createNewSession() {
         try {
-            const resp = await fetch('/api/session', { method: 'POST' });
-            const data = await resp.json();
-            if (data.error) throw new Error(data.error);
-
-            currentSessionId = data.session_id;
+            const session = await SupabaseClient.createSession('新しい壁打ち');
+            currentSessionId = session.id;
             el.chatMessages.innerHTML = '';
             sliderData = [];
             showPhase('WELCOME');
@@ -217,10 +214,8 @@ const ClarixApp = (() => {
         // セッションなし → 自動作成
         if (!currentSessionId) {
             try {
-                const resp = await fetch('/api/session', { method: 'POST' });
-                const data = await resp.json();
-                if (data.error) throw new Error(data.error);
-                currentSessionId = data.session_id;
+                const session = await SupabaseClient.createSession('新しい壁打ち');
+                currentSessionId = session.id;
             } catch (err) {
                 alert('セッション作成に失敗: ' + err.message);
                 return;

@@ -8,10 +8,9 @@ import { createClient } from '@supabase/supabase-js';
 export const config = { maxDuration: 60 };
 
 function getSupabase() {
-    return createClient(
-        process.env.SUPABASE_URL,
-        process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
-    );
+    const url = process.env.SUPABASE_URL || 'https://mfwgpicsalflypomhuly.supabase.co';
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1md2dwaWNzYWxmbHlwb21odWx5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzExNDU0ODAsImV4cCI6MjA4NjcyMTQ4MH0.f-jKJMCSl7r7KZztNCVw_VmznNCPP1AapjxD2oFrTIE';
+    return createClient(url, key);
 }
 
 async function callOpenAI(messages, jsonMode = false, maxTokens = 8000) {
