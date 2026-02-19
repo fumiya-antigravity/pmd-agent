@@ -67,6 +67,8 @@ const ClarixApp = (() => {
         el.sendBtn.addEventListener('click', handleSend);
         el.userInput.addEventListener('input', handleInputChange);
         el.userInput.addEventListener('keydown', e => {
+            // IME変換中（日本語入力の確定Enter等）は送信しない
+            if (e.isComposing || e.keyCode === 229) return;
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 handleSend();
