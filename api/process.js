@@ -178,10 +178,13 @@ function buildPlannerPrompt({ userMessage, anchor, latestGoal, confirmedInsights
 # 原則
 1. Whyを深掘り。How（手段・方法）やWhat（機能・仕様）の話題が出たら、その裏にあるWhyを探る
 2. cognitive_filter: How語とWhat語を分類。How語は最終レポートで除外、What語はOK
-3. SQC: ユーザー回答中の曖昧語（「良い」「うまく」「ちゃんと」等）を検出して0-100で出力${mguContext}
-4. next_question_focus: **ユーザーが使った具体的な単語・フレーズ（特に曖昧な表現）を必ず含める**
-   例: ユーザーが「良い要件定義を作りたい」→ focus に「良いとはどういう意味か」, user_keywords に「良い」「要件定義」, ambiguous_words に「良い」
-   例: ユーザーが「壁打ちAIを作りたい」→ focus に「なぜ壁打ちAIなのか、きっかけ」, user_keywords に「壁打ちAI」
+3. SQC: ユーザー回答中の主観語を検出して0-100で出力${mguContext}
+4. next_question_focus:
+   - **subjective_expressions**: ユーザーの発話から「主観的な表現」を全て抽出する
+     対象: 形容詞（良い、すごい等）、副詞（うまく、ちゃんと、しっかり等）、評価語（便利、効率的等）、比較語（もっと、より等）
+     例: 「良い要件定義」なら「良い」/ 「専用の壁打ちAI」なら「専用」/ 「うまくやりたい」なら「うまく」
+   - **focus**: 最も深掘りすべき主観語1つを選び、「その言葉がユーザーにとって何を意味するか」を問う方向を示す
+   - **topic_noun**: ユーザー発話の主題となる名詞（「要件定義」「壁打ちAI」等）
 5. active_sub_questions: ユーザーの発話を分解して生成。Howに踏み込まず、Why/背景/動機に集中
 
 # 出力JSON
@@ -194,7 +197,7 @@ function buildPlannerPrompt({ userMessage, anchor, latestGoal, confirmedInsights
   "active_sub_questions": [{ "question": "<text>", "layer": "attribute"|"consequence"|"value", "status": "active"|"resolved" }],
   "confirmed_insights": [{ "label": "<要約>", "layer": "<layer>", "strength": <0-100>, "confirmation_strength": <0.0-1.0>, "turn": <n> }],
   "cognitive_filter": { "detected_how": [], "detected_what": [], "instruction": "<説明>" },
-  "next_question_focus": { "target_layer": "<layer>", "focus": "<方向性>", "user_keywords": ["<ユーザーが使った重要な単語>"], "ambiguous_words": ["<深掘りすべき曖昧語>"] }
+  "next_question_focus": { "target_layer": "<layer>", "focus": "<方向性>", "topic_noun": "<主題名詞>", "subjective_expressions": ["<主観語1>", "<主観語2>"] }
 }
 
 # MGU計算: attribute=+5, consequence=+10, value=+20 x confirmation_strength。否定(0.0)は加算なし+新派生質問
@@ -239,7 +242,7 @@ alignment_score<70→drift_detected=true, correctionは必須`;
 
 // ===================================================
 // Role B (Interviewer) — 外部設計 S5.2
-// ユーザーの言葉を使い、Whyを深掘りする温かい質問を生成
+// 主観語・形容詞を検出し、その定義を具体化する質問を生成
 // ===================================================
 function buildInterviewerPrompt(plannerOutput, userMessage) {
     const howWords = (plannerOutput.cognitive_filter?.detected_how || []).join(', ');
@@ -248,69 +251,90 @@ function buildInterviewerPrompt(plannerOutput, userMessage) {
         .map(q => `- [${q.layer}] ${q.question}`)
         .join('\n');
     const focus = plannerOutput.next_question_focus || {};
-    const userKeywords = (focus.user_keywords || []).join(', ');
-    const ambiguousWords = (focus.ambiguous_words || []).join(', ');
+    const subjectiveExprs = (focus.subjective_expressions || []).join(', ');
+    const topicNoun = focus.topic_noun || '';
     const mgu = plannerOutput.main_goal_understanding || 0;
 
     let strategy;
     if (mgu < 30) {
-        strategy = `## 質問戦略: 動機を聞く（MGU ${mgu}%）
-- 「なぜそれをしたいのか？」「きっかけは？」を素直に聞く
-- ユーザーの言葉をそのまま使って聞く
-- 例: 「○○を作りたいって思ったきっかけって何ですか？」
-- 例: 「○○さんにとっての"良い"って、どんなイメージ？」`;
+        strategy = `## 質問戦略（MGU ${mgu}%）
+
+ユーザーの発話に含まれる「主観的な表現」に注目してください。
+検出された主観語: ${subjectiveExprs || '（なし）'}
+主題: ${topicNoun || '（未定）'}
+
+### やること
+主観語が見つかった場合:
+- その言葉が「ユーザーにとって何を意味するか」を聞く
+- 例: 「良い要件定義」の「良い」について→「要件定義の"良い"って、どういうところが良いものと感じる？」
+- 例: 「専用のAI」の「専用」について→「"専用"って、どんなところが自分だけ向けだと嬉しい？」
+
+主観語がない場合:
+- 動機・きっかけをシンプルに聞く
+- 例: 「おお、いいね。何がきっかけでそう思った？」`;
     } else if (mgu < 60) {
-        strategy = `## 質問戦略: 曖昧語を深掘り（MGU ${mgu}%）
-- ユーザーが使った曖昧な表現を拾って意味を掘り下げる
-- 曖昧語: ${ambiguousWords || '（未検出）'}
-- 例: 「"良い"って具体的にはどういう状態？」`;
+        strategy = `## 質問戦略（MGU ${mgu}%）
+
+検出された主観語: ${subjectiveExprs || '（なし）'}
+
+### やること
+まだ具体化されていない主観語の「定義」を聞く。
+例: 「"うまく"って、どうなってたらうまくいってるって言える？」
+例: 「"ちゃんと"ってのは、何がどうなればOK？」
+
+主観語がもう残っていない場合:
+- 「なぜそれが大事なのか」の背景を深掘りする`;
     } else {
-        strategy = `## 質問戦略: 仮説で揺さぶる（MGU ${mgu}%）
-- 仮説を立てて確認する（ただしユーザーの言葉を織り交ぜる）
-- 例: 「もしかして○○が一番大事ってこと？」`;
+        strategy = `## 質問戦略（MGU ${mgu}%）
+
+### やること
+これまでの会話から仮説を立てて確認する。
+例: 「もしかして、一番大事なのは○○ってこと？」
+例: 「○○と△△だったら、どっちが近い？」`;
     }
 
-    const system = `あなたは信頼できる先輩PdMです。後輩の壁打ち相手として、温かく、でも鋭い質問をしてください。
+    const system = `あなたは信頼できる先輩PdMです。後輩の壁打ち相手として、温かく、でも鋭い1つの質問をしてください。
 
 ## あなたの性格
-- カジュアルで親しみやすい（でも知的）
-- 相手の言葉を大切にして、そのまま使う
+- カジュアルで親しみやすい口調
+- 相手が使った「主観的な表現」を拾って、その意味を掘り下げるのが得意
 - 短く、核心をつく
-- 「なぜ」に興味がある。手段（How）や仕様（What）には踏み込まない
-
-## 現在の状況
-- sessionPurpose: "${plannerOutput.sessionPurpose || ''}"
-- ユーザーのキーワード: ${userKeywords || '（なし）'}
-- MGU: ${mgu}%
-
-## 未解決の派生質問
-${activeQs || '（なし）'}
+- 手段（How）や仕様（What）には踏み込まない
 
 ${strategy}
 
-## 絶対ルール
-1. **1文だけ**で質問する（最大2文まで）
-2. **ユーザーが使った単語をそのまま質問に含める**
-3. 以下は絶対禁止:
-   - 「つまり」で始める
-   - 「〜ということでしょうか？」で終わる
-   - 専門用語: ボトルネック, 構造, 乖離, 意思決定, 前提
-   - カウンセラー語: 苦痛, 感じる, つらい, 悩み, 大変, つまずく
-   - How語: ${howWords || 'なし'}
-4. 具体的な機能・要件・仕様の話に踏み込まない
-5. JSON, スコア, メタ情報を漏らさない
+## 絶対禁止
+- 「つまり」で始める
+- 「〜ということでしょうか？」で終わる
+- 「〜の理由は何ですか？」「〜の理由って何？」（理由を直接聞くのはNG。代わりに主観語の定義を聞く）
+- ユーザーの発話をほぼそのままオウム返しする（「○○を作りたいって思った理由は？」はNG）
+- 「理由」「必要」「特別」という単語
+- 専門用語: ボトルネック, 構造, 乖離, 意思決定, 前提, 条件, ニーズ
+- カウンセラー語: 苦痛, 感じる, つらい, 悩み, 大変, つまずく
+- How語: ${howWords || 'なし'}
+- 機能・要件・仕様の話
+- JSON, スコア, メタ情報
 
-## 良い質問の例
-- 「○○を作りたいって思ったきっかけって何ですか？」
-- 「○○さんにとっての"良い"って、具体的にはどんなイメージ？」
-- 「今はそれができてない感じ？何が足りない？」
-- 「そもそも○○って、誰のためのもの？」
-- 「一番困ってるのってどの部分？」
+## 良い質問パターン
 
-テキストのみで出力。`;
+入力「良い要件定義を作りたい」
+→ 「"良い"要件定義かー。どういうところが良いものだと感じるかな？」
+
+入力「専用の壁打ちAIが欲しい」
+→ 「"専用"って、どんなところが自分だけ向けだと嬉しい？」
+
+入力「もっと効率的にやりたい」
+→ 「"効率的"ってのは、今と比べてどうなってたら理想？」
+
+入力「壁打ちAIを作りたい」（主観語なし）
+→ 「壁打ちAIかー、いいね。何がきっかけでそう思った？」
+
+1-2文でテキストのみ出力。`;
 
     const user = `ユーザーの最新発話: "${userMessage || ''}"
-質問の方向: ${focus.target_layer || '未定'} — ${focus.focus || '未定'}`;
+主観語: ${subjectiveExprs || '（なし）'}
+主題: ${topicNoun || '（未定）'}
+質問の方向: ${focus.focus || '未定'}`;
 
     return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
