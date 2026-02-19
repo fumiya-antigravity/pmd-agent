@@ -106,6 +106,11 @@ const IntentCrew = (() => {
             if (!Array.isArray(task.forbidden_words)) task.forbidden_words = [];
             if (!task.status) task.status = 'pending';
             if (!task.retryReason) task.retryReason = '';
+
+            // アキネーター形式対応
+            if (!task.question_type) task.question_type = 'scale';
+            if (!Array.isArray(task.options)) task.options = [];
+
             // priority互換: stepをpriorityとして使用
             task.priority = task.step;
         });

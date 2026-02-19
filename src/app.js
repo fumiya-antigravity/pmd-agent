@@ -506,6 +506,11 @@
                 addMsg('ai', result.message);
             }
 
+            // アキネーター形式スライダーUI
+            if (result.uiOptions && result.uiOptions.length > 0) {
+                renderSliderForm(result.uiOptions);
+            }
+
             // 🔹 DB保存（result.messageの有無に関わらず必ず実行）
             const aiHistoryEntry = result.message || '[初回分析完了]';
             if (result.aspectUpdates) {
@@ -712,6 +717,11 @@
             // AI message（UI表示）
             if (result.message) {
                 addMsg('ai', result.message);
+            }
+
+            // アキネーター形式スライダーUI
+            if (result.uiOptions && result.uiOptions.length > 0) {
+                renderSliderForm(result.uiOptions);
             }
 
             // 🔹 DB保存（result.messageの有無に関わらず必ず実行）— 05ルール§6準拠
@@ -1206,6 +1216,64 @@
     /* ========================================
        UI HELPERS
        ======================================== */
+    function renderSliderForm(options) {
+        const formDiv = document.createElement('div');
+        formDiv.className = 'slider-form';
+
+        let html = `<div class="slider-header"><span>回答を選択してください (0-100%)</span></div>`;
+
+        options.forEach((opt, idx) => {
+            html += `
+            <div class="slider-item">
+                <div class="slider-header">
+                    <span class="slider-label">${esc(opt)}</span>
+                    <span class="slider-value" id="val-${idx}">50%</span>
+                </div>
+                <input type="range" class="slider-input" id="slider-${idx}" min="0" max="100" value="50" data-label="${esc(opt)}" data-idx="${idx}">
+            </div>`;
+        });
+
+        html += `<button class="slider-submit" id="slider-submit">回答を送信</button>`;
+        formDiv.innerHTML = html;
+
+        dom.chatMessages.appendChild(formDiv);
+        dom.chatScroll.scrollTop = dom.chatScroll.scrollHeight;
+
+        // Bind events
+        const inputs = formDiv.querySelectorAll('.slider-input');
+        inputs.forEach(input => {
+            input.addEventListener('input', (e) => {
+                const idx = e.target.dataset.idx;
+                const valSpan = formDiv.querySelector(`#val-${idx}`);
+                valSpan.textContent = e.target.value + '%';
+            });
+        });
+
+        const submitBtn = formDiv.querySelector('#slider-submit');
+        submitBtn.addEventListener('click', () => {
+            // Disable inputs
+            inputs.forEach(i => i.disabled = true);
+            submitBtn.disabled = true;
+            submitBtn.textContent = '送信中...';
+
+            // Collect values
+            const answers = [];
+            inputs.forEach(input => {
+                answers.push(`${input.dataset.label}: ${input.value}%`);
+            });
+            const answerText = `[回答] ${answers.join(', ')}`;
+
+            // Remove form visually (or keep it as log? -> Remove for cleanliness, or replace with text log)
+            // User requested: "回答は...選択できるビューを作ってください"
+            // Let's remove the interactive form and just show the user message.
+            formDiv.remove();
+
+            // Send as user message
+            addMsg('user', answerText);
+            startDelayedSend(answerText);
+        });
+    }
+
     function addMsg(role, content, type) {
         const el = document.createElement('div');
         el.className = `msg ${role}`;

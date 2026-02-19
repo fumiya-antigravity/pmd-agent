@@ -147,6 +147,9 @@ const Pipeline = (() => {
                 cognitive_filter: phase0Result.cognitive_filter,
                 why_completeness_score: score,
             },
+            // アキネーター形式対応: 現在のタスクのoptionsをUIへ
+            uiOptions: (tasks[phase0Result.current_task_index || 0] || {}).options || [],
+            uiQuestionType: (tasks[phase0Result.current_task_index || 0] || {}).question_type || 'scale',
         };
     }
 

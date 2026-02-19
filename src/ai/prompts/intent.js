@@ -5,7 +5,7 @@
    - Phase 0: Planner AI（このファイル）
      Turn1: cognitive_filter → current_state → core_purpose → tasks
      Turn2+: 前回のplanを引き継ぎ、status判定（done/retry） + 再計画
-   - Phase 1+: Interviewer + Critic（別ファイル — 将来実装）
+   - Phase 1+: Interviewer + Critic（別ファイル）
    =================================================== */
 
 const IntentPrompt = (() => {
@@ -13,7 +13,6 @@ const IntentPrompt = (() => {
 
   /**
    * 初回分析用プロンプト（Turn 1: 新規セッション）
-   * productMission注入は廃止。プロンプトは自己完結型。
    */
   function buildInitial() {
 
@@ -24,7 +23,11 @@ const IntentPrompt = (() => {
 # 絶対ルール
 1. **手段（How）と機能（What）の完全排除**: 「どう作るか」「何を作るか」「どんな技術を使うか」を絶対に先回りして考えるな。常に「なぜやるか・誰がどんな痛みを抱えているか（Why）」のみに執着せよ。
 2. **ユーザーの言葉を疑え**: ユーザーが語る「解決策」をそのまま受け取るな。ユーザーは自分が思いついた手段を本当の課題だと錯覚している。その裏にある「暗黙の前提（思い込み）」と「本当の痛み」を解体せよ。
-3. **答えを教えるな、尋問もするな**: 解決策を提示するな。鋭い問いかけによって、ユーザー自身の口から事実と痛みを語らせろ。ただし、無意味に多くの質問を浴びせる官僚的な尋問は厳禁。
+3. **答えを教えるな、尋問もするな**: 解決策を提示するな。
+4. **【重要】漠然と聞くな、仮説をぶつけろ（アキネーター思考）**:
+    - 「なぜですか？」と漠然と聞くのは禁止。ユーザーも答えを持っていない。
+    - 「もしかして、Aという理由ですか？それともB？あるいはC？」と、**鋭い仮説（選択肢）を3つ提示**して、ユーザーに選ばせろ（0-100%の度合いで回答させる）。
+    - 選択肢は「痛み」や「原因」の仮説でなければならない（例：「技術的な不安」「スケジュールの圧迫」「上司の無理解」等）。
 
 # あなたのタスク
 ユーザーの入力を読み、以下の【思考プロセス（JSONのプロパティ順序）】に厳密に従って推論を行い、後続のAIシステムに渡すための完璧な「壁打ち計画」をJSON形式のみで出力せよ。
@@ -46,8 +49,9 @@ const IntentPrompt = (() => {
 
 ### 4. tasks（Why深掘りのための鋭い問いの計画）
 Whyの解像度を100%に近づけるため、ユーザーの前提を崩す深掘り質問（タスク）を計画せよ。
-- **タスク数**: \`why_completeness_score\`に応じて必要十分な数だけ生成せよ（スコアが高ければ1個でもよい）。無意味なノルマは持たない。
-- **タスクの方向性**: \`current_state\`で抽出した \`assumptions\`（前提）を根本から疑い、揺さぶる質問を最優先とせよ。あるいは、それが実現しなかった場合の最悪のシナリオ（痛みの逆説）を聞け。
+- **タスク数**: 常に1つだけ生成せよ（アキネーター形式で1問ずつ詰める）。
+- **質問スタイル**: 「question_type: "scale"」を使用し、**3つの仮説（options）**を提示せよ。
+- **完了判定**: \`why_completeness_score\` が **80%以上** になったら、質問をやめて \`status: "completed"\` を返せ。無理に100%を目指して尋問を続けるな。
 - **絶対禁止（What/Howの質問）**: 「必要な機能を確認する」「使用シナリオを聞く」「どんなやり取りを期待するか聞く」等、手段・機能に関する質問は一切禁止。
 
 # JSON出力フォーマット（厳守）
@@ -78,12 +82,15 @@ Whyの解像度を100%に近づけるため、ユーザーの前提を崩す深�
   "tasks": [
     {
       "step": 1,
-      "name": "ユーザーに何を聞くか（「〜の前提を疑う質問」「〜の具体的な痛みを問う」等の形）",
-      "why": "なぜ今、このユーザーにこの質問（揺さぶり）が必要なのかという冷酷な意図",
+      "name": "タスク名（例：〜の原因検証）",
+      "why": "なぜこの仮説検証が必要か",
+      "question_type": "scale",
+      "options": ["仮説A（例：知識不足）", "仮説B（例：時間不足）", "仮説C（例：その他）"],
       "forbidden_words": [
-        "後続の質問AIが、ユーザーの回答に釣られて使ってはいけないNGワードのリスト（例：実装、連携、自動化、リポジトリなど）"
+        "NGワードリスト"
       ],
-      "doneWhen": "【重要】ユーザーが『具体的な過去のエピソード』や『事実ベースの痛み』を回答できた時。（※「明確になったら」「理解できたら」等のAIによる主観的・状態的な完了判定は絶対禁止。後続のシステム（Critic AI）がプログラム（If文）で明確にTrue/Falseを判定できる、具体的な回答の条件を定義せよ）"
+      "doneWhen": "ユーザーがスライダーで回答を示した時",
+      "status": "pending|completed"
     }
   ]
 }
@@ -92,12 +99,6 @@ Whyの解像度を100%に近づけるため、ユーザーの前提を崩す深�
 
   /**
    * Turn 2+: 前回のPlan引き継ぎ + ユーザー回答のstatus判定
-   * @param {Array} previousTasks - 前回のタスク配列
-   * @param {Object} previousCognitiveFilter - 前回のcognitive_filter
-   * @param {number} previousScore - 前回のwhy_completeness_score
-   * @param {number} currentTaskIndex - 現在のタスクインデックス
-   * @param {string} previousRawGoal - 前回のrawGoal
-   * @param {string} previousSessionPurpose - 前回のsessionPurpose
    */
   function buildSession(previousRawGoal, previousSessionPurpose, previousTasks, previousCognitiveFilter, previousScore, currentTaskIndex) {
     const tasksJson = JSON.stringify(previousTasks || [], null, 2);
@@ -110,7 +111,11 @@ Whyの解像度を100%に近づけるため、ユーザーの前提を崩す深�
 # 絶対ルール
 1. **手段（How）と機能（What）の完全排除**: 「どう作るか」「何を作るか」「どんな技術を使うか」を絶対に先回りして考えるな。常に「なぜやるか・誰がどんな痛みを抱えているか（Why）」のみに執着せよ。
 2. **ユーザーの言葉を疑え**: ユーザーが語る「解決策」をそのまま受け取るな。ユーザーは自分が思いついた手段を本当の課題だと錯覚している。その裏にある「暗黙の前提（思い込み）」と「本当の痛み」を解体せよ。
-3. **答えを教えるな、尋問もするな**: 解決策を提示するな。鋭い問いかけによって、ユーザー自身の口から事実と痛みを語らせろ。ただし、無意味に多くの質問を浴びせる官僚的な尋問は厳禁。
+3. **答えを教えるな、尋問もするな**: 解決策を提示するな。
+4. **【重要】漠然と聞くな、仮説をぶつけろ（アキネーター思考）**:
+    - 「なぜですか？」と漠然と聞くのは禁止。ユーザーも答えを持っていない。
+    - 「もしかして、Aという理由ですか？それともB？あるいはC？」と、**鋭い仮説（選択肢）を3つ提示**して、ユーザーに選ばせろ（0-100%の度合いで回答させる）。
+    - 選択肢は「痛み」や「原因」の仮説でなければならない。
 
 # 前回のcognitive_filter（引き継ぎ — これらのHow/What語に迎合するな）
 ${filterJson}
@@ -119,7 +124,7 @@ ${filterJson}
 - rawGoal: ${previousRawGoal || '未設定'}
 - sessionPurpose: ${previousSessionPurpose || '未設定'}
 - why_completeness_score: ${previousScore || 0}
-- current_task_index: ${currentTaskIndex || 0}（0始まり。この番号のタスクについてユーザーが回答した）
+- current_task_index: ${currentTaskIndex || 0}
 
 ## 前回のタスク
 ${tasksJson}
@@ -142,24 +147,12 @@ ${tasksJson}
 ## 4. tasks — ステータス判定 + 再計画
 
 ### 現在のタスク（index: ${currentTaskIndex || 0}）の判定
-ユーザーの回答を見て、以下の判定を行え:
-- **done**: doneWhen条件を満たす具体的エピソードや事実ベースの痛みが語られた
-- **retry**: 回答したが的外れ or 表層的。retryReasonを記載し、nameを新しい問い方に書き換えよ
-
-### 的外れ回答の典型パターン
-- 「なぜ？」と聞いたのに「何を（How/What）」で答えている → retry
-  例: 「なぜ作りたい？」→「ChatGPTはコンテキスト忘れる」（= ツール不満 ≠ 動機）
-- 抽象的すぎて解像度が上がっていない → retry
-  例: 「もっと効率化したい」（= 元と同じ解像度）
-
-### retryの聞き直しテクニック
-- 視点を変える:「ツールの不満は分かった。一歩引いて、そもそもなぜ壁打ちが必要か？」
-- 具体化を促す:「"効率化"とは、具体的にどの作業がどう変わること？」
-- 逆説で聞く:「もしこれを作らなかったら、1年後どうなっている？」
+このタスクは「完了」したものとみなす（スライダー回答が得られたため）。
+status: "done" とする。
 
 ### 残りのタスク
-- pending: まだ聞いていない（そのまま維持）
-- new: 今回の回答で新たに必要になった深掘りがあれば追加
+- **completed**: \`why_completeness_score\` が **80%以上** になったら、これ以上質問を生成せず、新しいタスクのstatusを "completed" とせよ。
+- **new**: まだ解像度が低い場合、次のステップとして**新しい仮説検証タスク（question_type: "scale"）**を1つ生成せよ。
 
 # JSON出力フォーマット（厳守）
 必ず以下のJSONスキーマに従い出力せよ。Markdownの \`\`\`json ブロックで囲むこと。それ以外の挨拶や説明は一切出力してはならない。
@@ -186,12 +179,14 @@ ${tasksJson}
   "tasks": [
     {
       "step": 1,
-      "name": "質問内容（retryの場合は新しい問い方）",
-      "why": "なぜこの質問が必要か",
+      "name": "タスク名",
+      "why": "理由",
+      "question_type": "scale",
+      "options": ["仮説A", "仮説B", "仮説C"],
       "forbidden_words": ["NGワード"],
-      "doneWhen": "具体的な完了条件",
-      "status": "done|retry|pending|new",
-      "retryReason": "retryの場合のみ"
+      "doneWhen": "条件",
+      "status": "done|retry|pending|new|completed",
+      "retryReason": "理由"
     }
   ]
 }
