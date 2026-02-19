@@ -176,9 +176,13 @@ function buildPlannerPrompt({ userMessage, anchor, latestGoal, confirmedInsights
     const system = `あなたは Planner AI（Role A）です。ユーザーの壁打ちを分析し、Whyの核心を構造的に理解するためのJSONを出力してください。
 
 # 原則
-1. Whyを深掘り。How/Whatは排除せず思考のヒントとして活用
-2. cognitive_filter: How語とWhat語を分類（排除ではない）。How語は最終レポートで除外、What語はOK
-3. SQC: ユーザー回答中の曖昧語を検出して0-100で出力${mguContext}
+1. Whyを深掘り。How（手段・方法）やWhat（機能・仕様）の話題が出たら、その裏にあるWhyを探る
+2. cognitive_filter: How語とWhat語を分類。How語は最終レポートで除外、What語はOK
+3. SQC: ユーザー回答中の曖昧語（「良い」「うまく」「ちゃんと」等）を検出して0-100で出力${mguContext}
+4. next_question_focus: **ユーザーが使った具体的な単語・フレーズ（特に曖昧な表現）を必ず含める**
+   例: ユーザーが「良い要件定義を作りたい」→ focus に「良いとはどういう意味か」, user_keywords に「良い」「要件定義」, ambiguous_words に「良い」
+   例: ユーザーが「壁打ちAIを作りたい」→ focus に「なぜ壁打ちAIなのか、きっかけ」, user_keywords に「壁打ちAI」
+5. active_sub_questions: ユーザーの発話を分解して生成。Howに踏み込まず、Why/背景/動機に集中
 
 # 出力JSON
 {
@@ -190,12 +194,12 @@ function buildPlannerPrompt({ userMessage, anchor, latestGoal, confirmedInsights
   "active_sub_questions": [{ "question": "<text>", "layer": "attribute"|"consequence"|"value", "status": "active"|"resolved" }],
   "confirmed_insights": [{ "label": "<要約>", "layer": "<layer>", "strength": <0-100>, "confirmation_strength": <0.0-1.0>, "turn": <n> }],
   "cognitive_filter": { "detected_how": [], "detected_what": [], "instruction": "<説明>" },
-  "next_question_focus": { "target_layer": "<layer>", "focus": "<方向性>" }
+  "next_question_focus": { "target_layer": "<layer>", "focus": "<方向性>", "user_keywords": ["<ユーザーが使った重要な単語>"], "ambiguous_words": ["<深掘りすべき曖昧語>"] }
 }
 
-# MGU計算: attribute=+5, consequence=+10, value=+20 × confirmation_strength。否定(0.0)は加算なし+新派生質問
-# question_type: MGU<60=open, MGU≥60=hypothesis
-# SQC≥80: 派生質問をresolved。SQC<80: 新派生質問をactive追加
+# MGU計算: attribute=+5, consequence=+10, value=+20 x confirmation_strength。否定(0.0)は加算なし+新派生質問
+# question_type: MGU<60=open（必ず）, MGU>=60=hypothesis
+# SQC>=80: 派生質問をresolved。SQC<80: 新派生質問をactive追加
 # confirmed_insights: 差分のみ出力${correctionSection}`;
 
     const user = `${anchorSection}\n${previousState}\n${insightsSection}\n\n## 会話履歴\n${(history || []).map(m => `[${m.role}] ${m.content}`).join('\n')}\n\n## ユーザー最新メッセージ（Turn ${turn}）\n${userMessage}`;
@@ -234,33 +238,79 @@ alignment_score<70→drift_detected=true, correctionは必須`;
 }
 
 // ===================================================
-// Role B (Interviewer) — 外部設計 §5.2
+// Role B (Interviewer) — 外部設計 S5.2
+// ユーザーの言葉を使い、Whyを深掘りする温かい質問を生成
 // ===================================================
-function buildInterviewerPrompt(plannerOutput) {
-    const howWords = (plannerOutput.cognitive_filter?.detected_how || []).join('、');
+function buildInterviewerPrompt(plannerOutput, userMessage) {
+    const howWords = (plannerOutput.cognitive_filter?.detected_how || []).join(', ');
     const activeQs = (plannerOutput.active_sub_questions || [])
         .filter(q => q.status === 'active')
         .map(q => `- [${q.layer}] ${q.question}`)
         .join('\n');
-    const qType = plannerOutput.question_type || 'open';
     const focus = plannerOutput.next_question_focus || {};
+    const userKeywords = (focus.user_keywords || []).join(', ');
+    const ambiguousWords = (focus.ambiguous_words || []).join(', ');
+    const mgu = plannerOutput.main_goal_understanding || 0;
 
-    const style = qType === 'open'
-        ? '質問スタイル: オープン型（まず広く聴く）。「～についてもう少し教えてください」形式。'
-        : '質問スタイル: 仮説提示型（揺さぶって気づきを生む）。「つまり○○ということでしょうか？」形式。';
+    let strategy;
+    if (mgu < 30) {
+        strategy = `## 質問戦略: 動機を聞く（MGU ${mgu}%）
+- 「なぜそれをしたいのか？」「きっかけは？」を素直に聞く
+- ユーザーの言葉をそのまま使って聞く
+- 例: 「○○を作りたいって思ったきっかけって何ですか？」
+- 例: 「○○さんにとっての"良い"って、どんなイメージ？」`;
+    } else if (mgu < 60) {
+        strategy = `## 質問戦略: 曖昧語を深掘り（MGU ${mgu}%）
+- ユーザーが使った曖昧な表現を拾って意味を掘り下げる
+- 曖昧語: ${ambiguousWords || '（未検出）'}
+- 例: 「"良い"って具体的にはどういう状態？」`;
+    } else {
+        strategy = `## 質問戦略: 仮説で揺さぶる（MGU ${mgu}%）
+- 仮説を立てて確認する（ただしユーザーの言葉を織り交ぜる）
+- 例: 「もしかして○○が一番大事ってこと？」`;
+    }
 
-    const system = `あなたは先輩PdMです。壁打ち相手として自然な1文の質問を生成してください。
+    const system = `あなたは信頼できる先輩PdMです。後輩の壁打ち相手として、温かく、でも鋭い質問をしてください。
 
-性格: 率直・シンプル・知的な対等さ
-現在: sessionPurpose="${plannerOutput.sessionPurpose || ''}", type=${qType}
-派生質問:\n${activeQs || '（なし）'}
+## あなたの性格
+- カジュアルで親しみやすい（でも知的）
+- 相手の言葉を大切にして、そのまま使う
+- 短く、核心をつく
+- 「なぜ」に興味がある。手段（How）や仕様（What）には踏み込まない
 
-禁止: JSON漏洩, How語混入(${howWords || 'なし'}), 禁止語(苦痛/感じる/つらい/悩み/大変/つまずく), 複数質問
-推奨語: ボトルネック, 構造, 文脈, 意思決定, 前提, 乖離
-${style}
-テキストのみ（1-2文）で出力。`;
+## 現在の状況
+- sessionPurpose: "${plannerOutput.sessionPurpose || ''}"
+- ユーザーのキーワード: ${userKeywords || '（なし）'}
+- MGU: ${mgu}%
 
-    const user = `次の方向で質問: ${focus.target_layer || '未定'} — ${focus.focus || '未定'}`;
+## 未解決の派生質問
+${activeQs || '（なし）'}
+
+${strategy}
+
+## 絶対ルール
+1. **1文だけ**で質問する（最大2文まで）
+2. **ユーザーが使った単語をそのまま質問に含める**
+3. 以下は絶対禁止:
+   - 「つまり」で始める
+   - 「〜ということでしょうか？」で終わる
+   - 専門用語: ボトルネック, 構造, 乖離, 意思決定, 前提
+   - カウンセラー語: 苦痛, 感じる, つらい, 悩み, 大変, つまずく
+   - How語: ${howWords || 'なし'}
+4. 具体的な機能・要件・仕様の話に踏み込まない
+5. JSON, スコア, メタ情報を漏らさない
+
+## 良い質問の例
+- 「○○を作りたいって思ったきっかけって何ですか？」
+- 「○○さんにとっての"良い"って、具体的にはどんなイメージ？」
+- 「今はそれができてない感じ？何が足りない？」
+- 「そもそも○○って、誰のためのもの？」
+- 「一番困ってるのってどの部分？」
+
+テキストのみで出力。`;
+
+    const user = `ユーザーの最新発話: "${userMessage || ''}"
+質問の方向: ${focus.target_layer || '未定'} — ${focus.focus || '未定'}`;
 
     return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
@@ -388,7 +438,7 @@ export default async function handler(req, res) {
                 console.error('[process] goal_history保存失敗:', e);
             }
 
-            const question = await callOpenAI(buildInterviewerPrompt(plan), false, 500);
+            const question = await callOpenAI(buildInterviewerPrompt(plan, user_message), false, 500);
 
             try {
                 await dbInsert(supabase, 'messages', { session_id, role: 'assistant', content: question, turn_number: 0, metadata: { turn: 0 } });
@@ -418,7 +468,7 @@ export default async function handler(req, res) {
         if (turn >= MAX_SUB_QUESTION_TURNS) {
             const sliderData = synthesize(insights, anchor.original_message || '');
             if (sliderData.length === 0) {
-                const q = await callOpenAI(buildInterviewerPrompt({ sessionPurpose: latestGoal?.session_purpose || '', question_type: 'hypothesis', active_sub_questions: [], cognitive_filter: {}, next_question_focus: { target_layer: 'value', focus: '最終確認' } }), false, 500);
+                const q = await callOpenAI(buildInterviewerPrompt({ sessionPurpose: latestGoal?.session_purpose || '', question_type: 'hypothesis', active_sub_questions: [], cognitive_filter: {}, next_question_focus: { target_layer: 'value', focus: '最終確認' }, main_goal_understanding: 80 }, user_message), false, 500);
                 try { await dbInsert(supabase, 'messages', { session_id, role: 'assistant', content: q, turn_number: turn }); } catch (e) { /* ignore */ }
                 return res.status(200).json({ phase: 'CONVERSATION', message: q, turn, debug: { mgu: 80, forced: true } });
             }
@@ -485,7 +535,7 @@ export default async function handler(req, res) {
         if (plan.main_goal_understanding >= 80 && allResolved) {
             const { data: latestInsights } = await supabase.from('confirmed_insights').select('*').eq('session_id', session_id).order('strength', { ascending: false });
             if (!latestInsights || latestInsights.length === 0) {
-                const question = await callOpenAI(buildInterviewerPrompt(plan), false, 500);
+                const question = await callOpenAI(buildInterviewerPrompt(plan, user_message), false, 500);
                 try { await dbInsert(supabase, 'messages', { session_id, role: 'assistant', content: question, turn_number: turn }); } catch (e) { /* ignore */ }
                 return res.status(200).json({ phase: 'CONVERSATION', message: question, turn, debug: buildDebug(plan, mgr) });
             }
@@ -495,7 +545,7 @@ export default async function handler(req, res) {
         }
 
         // ── 会話継続 ──
-        const question = await callOpenAI(buildInterviewerPrompt(plan), false, 500);
+        const question = await callOpenAI(buildInterviewerPrompt(plan, user_message), false, 500);
         try { await dbInsert(supabase, 'messages', { session_id, role: 'assistant', content: question, turn_number: turn }); } catch (e) { /* ignore */ }
 
         return res.status(200).json({ phase: 'CONVERSATION', message: question, turn, debug: buildDebug(plan, mgr) });
