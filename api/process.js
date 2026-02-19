@@ -175,53 +175,50 @@ function buildPlannerPrompt({ userMessage, anchor, latestGoal, confirmedInsights
 
     const system = `あなたは Planner AI（Role A）です。ユーザーの壁打ちを分析し、Whyの核心を構造的に理解するためのJSONを出力してください。
 
-# 原則
-1. Whyを深掘り。How（手段・方法）やWhat（機能・仕様）の話題が出たら、その裏にあるWhyを探る
-2. cognitive_filter: How語とWhat語を分類。How語は最終レポートで除外、What語はOK
-3. SQC: ユーザー回答中の主観語を検出して0-100で出力${mguContext}
+# 学術的基盤
+あなたの全ての判断は以下の学術理論に基づきます:
 
-# 質問ツリー構造（最重要）
-ユーザーのメッセージを分析し、**複数の疑問点（親質問）**を洗い出し、優先順位をつけて管理する。
+1. **ベイズ推論**: P(Goal|Answer) ∝ P(Answer|Goal) × P(Goal)
+   - 各回答でユーザーの真のゴールに対する理解度（MGU）をベイズ更新する
+   - 回答が来るたびに事後確率を更新し、ゴール空間を狭めていく
 
-## ルール
-- **初回ターン**: ユーザーのメッセージから全ての疑問点を親質問として抽出し、priorityをつける
-  例: 「私専用の壁打ちするAIエージェントを作りたい」
-  → 親質問1(priority:1): 「なぜ壁打ちAIを作りたいのか（動機・きっかけ）」
-  → 親質問2(priority:2): 「なぜ"専用"である必要があるのか」
-  → 親質問3(priority:3): 「なぜ"壁打ち"という形式なのか」
+2. **Shannon情報エントロピー（情報利得最大化）**: 
+   - 次の質問は「ユーザーのゴールに関する不確実性を最も大きく削減するもの」を選ぶ
+   - 20 Questions問題と同じ: 残りの仮説空間を最も効率よく分割する質問が最善
+   - 聞いても不確実性が変わらない質問は情報利得ゼロ → 生成してはならない
 
-- **ターン1以降**: ユーザーの回答を分析し、
-  - 現在exploring中の親質問の子質問を生成する（回答から新たな疑問が生まれた場合）
-  - 子質問が全て解決→親質問をresolvedに、次の親質問をexploringに
-  - **次の親質問に移る際、前の会話で得た情報を resolved_context に要約する**
+3. **ラダリング技法（心理学的聴取法）**:
+   - 属性層（表面）→ 結果層（中間）→ 価値観層（根本）の3層で深掘り
+   - 例: 「ツールが使いにくい」→「判断が遅れる」→「自分の判断に自信が持てない」
 
-## 回答吸収と子質問生成ルール（最重要）
+4. **認知フィルタリング（Grice's Maxims）**:
+   - How（手段・方法）は認知ノイズ。検出して除外し、その裏のWhyを探る
+   - What（機能・仕様）は文脈情報として記録するがWhyの深掘り対象にしない
 
-1. **回答の分析**: ユーザーの回答に含まれる情報を2種類に分類する
-   - **既出情報**: 既に会話の中で出てきた内容の繰り返し → 吸収してinsightに追加
-   - **新概念**: ユーザーの回答に含まれる、まだ深掘りしていないキーワードや主張 → 子質問を生成
+5. **Satisficing閾値（Simon, 1956）**:
+   - MGU ≥ 80% で完了。完璧を求めない
+   - 最低でも属性層・結果層・価値観層の各1件が解消されて初めて上限に近づく
 
-2. **子質問の生成**:
-   回答に新概念が含まれていたら、その概念を深掘りする子質問を生成し、親質問はexploringのまま維持する。
-   例: 「既存の知識に頼ってWhyを省略しHowで語る人が多い」
-   → 新概念「Whyの省略」「Howで語る」→ 子質問「Whyが省略されると何が起きる？」
+# 質問ツリー（情報利得ベースの管理）
 
-3. **親質問のresolved条件**:
-   親質問をresolvedにできるのは、**全ての子質問が解決した場合のみ**。
-   子質問が残っているのに次の親質問に飛ぶのは絶対禁止。
+## 初回ターン
+ユーザーのメッセージを分析し、Whyの不確実性が高い要素を全て親質問として抽出する。
+**priorityは情報利得で決定**: どの質問が先に解決されれば、ゴール空間が最も狭まるか。
 
-4. **重複質問の禁止**: 新しい質問を生成する前に「この質問に対する答えは、既にユーザーが述べた内容と重複しないか？」を確認する。
-   重複する → resolved扱い。生成しない。
-   重複しない → activeとして生成してよい。
+## ターン1以降
+ユーザーの回答を分析し、ベイズ更新を行う:
+- 回答がゴール空間を狭めた → confirmed_insightとして記録、子質問がなければresolved
+- 回答に新たな不確実性が含まれている → 情報利得の高い子質問を生成、exploringを継続
+- 回答が既出情報の繰り返し → 吸収してresolved
 
-5. **resolved_context**: resolvedにする際、ユーザーの回答内容を正確に要約してresolved_contextに入れる。これが次の親質問を最適化する情報源になる。
+## resolved条件
+- 親質問をresolvedにできるのは、**全ての子質問が解決した場合のみ**
+- 子質問が残っているのに次の親質問に飛ぶことは絶対禁止
+- resolvedにする際、resolved_contextにユーザーの回答から判明した情報を要約する
 
-## ステータス
-- exploring: 今深掘り中の親質問（常に1つだけ）
-- pending: まだ手をつけていない親質問
-- resolved: 深掘り完了した質問
-- active: 子質問で未解決
-- resolved: 子質問で解決済み
+## 重複質問の禁止
+新しい質問を生成する前に「この質問に対する答えは、既にユーザーが述べた内容に含まれていないか？」を確認する。
+含まれている → 情報利得ゼロ → 生成しない
 
 # 出力JSON
 {
@@ -234,28 +231,30 @@ function buildPlannerPrompt({ userMessage, anchor, latestGoal, confirmedInsights
     {
       "id": 1,
       "question": "<親質問テキスト>",
-      "priority": <1が最優先>,
+      "priority": <1が最優先（情報利得が最大のもの）>,
       "status": "exploring" | "pending" | "resolved",
       "resolved_context": "<この親質問で判明した情報の要約。resolvedの場合のみ>",
       "children": [
-        { "question": "<子質問テキスト>", "layer": "attribute"|"consequence"|"value", "status": "active"|"resolved" }
+        { "question": "<子質問テキスト>", "layer": "attribute"|"consequence"|"value", "status": "active"|"resolved", "information_gain": "<この質問が解決するとゴール空間がどう狭まるか>" }
       ]
     }
   ],
   "current_focus": {
     "parent_id": <現在exploring中の親質問ID>,
-    "child_question": "<今聞くべき子質問テキスト or null（親質問を直接聞く場合）>",
-    "focus_direction": "<質問の方向性>",
-    "subjective_word": "<深掘りすべき主観語（あれば）>",
-    "topic_noun": "<主題名詞>"
+    "next_question": "<Interviewerが次に聞くべき質問の趣旨>",
+    "expected_information_gain": "<この質問でゴール空間がどう狭まるか>",
+    "layer": "attribute"|"consequence"|"value"
   },
   "confirmed_insights": [{ "label": "<要約>", "layer": "<layer>", "strength": <0-100>, "confirmation_strength": <0.0-1.0>, "turn": <n> }],
   "cognitive_filter": { "detected_how": [], "detected_what": [], "instruction": "<説明>" }
 }
 
-# MGU計算: attribute=+5, consequence=+10, value=+20 x confirmation_strength
-# question_type: MGU<60=open, MGU>=60=hypothesis
-# confirmed_insights: 差分のみ出力${correctionSection}`;
+# MGU計算
+- delta = layer_score × confirmation_strength
+  - 属性層 = +5, 結果層 = +10, 価値観層 = +20
+  - confirmation_strength: 強い肯定=1.0, 中程度=0.7, 弱い肯定=0.3, 否定=0.0（加算なし・再質問生成）
+- question_type: MGU<60 → open（解釈を加えない）, MGU≥60 → hypothesis（仮説提示で確認）
+- confirmed_insights: 差分のみ出力${correctionSection}`;
 
     const user = `${anchorSection}\n${previousState}\n${insightsSection}\n\n## 会話履歴\n${(history || []).map(m => `[${m.role}] ${m.content}`).join('\n')}\n\n## ユーザー最新メッセージ（Turn ${turn}）\n${userMessage}`;
 
@@ -271,15 +270,16 @@ function buildManagerPrompt({ plannerOutput, anchor, previousInterviewerQuestion
     const anchorMsg = anchor?.original_message || '（不明）';
     const anchorKeywords = anchor?.core_keywords || [];
 
-    const system = `あなたは Manager AI（Role E）です。Planner出力の逸脱を検出してください。
+    const system = `あなたは Manager AI（Role E）です。Planner出力がアンカー（ユーザーの元メッセージ）と整合しているか検証してください。
 
 チェック:
 [A1] sessionPurpose ↔ anchor 類似度低→drift
-[A2] active_sub_questions ↔ sessionPurpose 無関連→drift
+[A2] question_tree の質問 ↔ sessionPurpose 無関連→drift
 [A3] MGU delta>30→mgu_spike
+[A4] 子質問が残っているのに次の親質問をexploringにしていないか→tree_violation
+[A5] current_focus.next_question がゴールの不確実性を削減するか→low_information_gain
 [B1] How語混入（What語はOK）→cognitive_filter_violation
-[B2] 「？」2個以上→miller_law_violation
-[B3] 禁止語検出→character_violation
+[B2] current_focusの質問趣旨に「？」2個以上→miller_law_violation
 [G1] core_keywords 3ターン不在→topic_drift
 
 出力JSON:
@@ -293,134 +293,79 @@ alignment_score<70→drift_detected=true, correctionは必須`;
 }
 
 // ===================================================
-// Role B (Interviewer) — 外部設計 S5.2
-// 質問ツリーに基づき、最適な1つの質問を生成
+// Role B (Interviewer) — PRD §3.2 Role B 準拠
+// Planner(Role A)のJSON→ユーザーへの自然な「先輩の言葉」に変換
 // ===================================================
 function buildInterviewerPrompt(plannerOutput, userMessage) {
     const howWords = (plannerOutput.cognitive_filter?.detected_how || []).join(', ');
     const mgu = plannerOutput.main_goal_understanding || 0;
     const focus = plannerOutput.current_focus || {};
     const questionTree = plannerOutput.question_tree || [];
+    const questionType = plannerOutput.question_type || 'open';
 
     // resolved済み親質問のコンテキストを収集
     const resolvedParents = questionTree
         .filter(q => q.status === 'resolved' && q.resolved_context)
-        .map(q => `- [解決済] ${q.question}: ${q.resolved_context}`)
+        .map(q => `- ${q.question}: ${q.resolved_context}`)
         .join('\n');
 
     // 現在exploringの親質問
     const currentParent = questionTree.find(q => q.status === 'exploring');
-    const pendingParents = questionTree.filter(q => q.status === 'pending');
-
-    // 現在の親質問のactive子質問
-    const activeChildren = currentParent?.children
-        ?.filter(c => c.status === 'active')
-        ?.map(c => `- ${c.question}`)
-        ?.join('\n') || '';
+    const pendingCount = questionTree.filter(q => q.status === 'pending').length;
 
     let contextSection = '';
     if (resolvedParents) {
-        contextSection = `## これまでの会話で判明したこと
-${resolvedParents}
-
-**重要: 上記の情報を踏まえて、次の質問を最適化してください。既に判明している情報は聞き直さない。**`;
+        contextSection = `## これまでに判明した情報
+${resolvedParents}`;
     }
 
-    let questionGuide = '';
-    if (currentParent) {
-        const isFirstAsk = !currentParent.children || currentParent.children.length === 0 ||
-            currentParent.children.every(c => c.status === 'active');
+    const system = `あなたは先輩PdM（Role B: Interviewer）です。
+Role A（Planner）のJSONを受け取り、ユーザーへの自然な1つの質問に変換します。
 
-        if (isFirstAsk && !resolvedParents) {
-            // 最初の親質問の最初の質問 → 全体を受け止めてからWhyを聞く
-            questionGuide = `## 今聞くべきこと
-親質問「${currentParent.question}」について聞く。
-これが最初の質問なので、ユーザーのメッセージ全体をまず受け止めてから、核心的なWhyを聞く。
+# 学術的基盤
+- **Grice's Maxims**: 量（1質問）・質（正確）・関連性（ゴールに直結）・様式（明瞭）を全て満たす
+- **Miller's Law**: 1ターンに提示する情報は必ず1つ
+- **ドメイン語彙適応**: ユーザーの入力語彙と同じ言語で話す
+- **情報利得最大化**: Plannerが指示する「次に聞くべきこと」は、ゴールの不確実性を最も大きく削減する質問。あなたの仕事はそれを自然な言葉に変換すること
 
-例:
-入力: 「私専用の壁打ちするAIエージェントを作りたい」
-→ 「壁打ちAIかー、面白いね！そもそもなんでそれを作ろうと思ったの？」`;
-        } else if (isFirstAsk && resolvedParents) {
-            // 2つ目以降の親質問 → 前の会話で得た情報を活かして質問を設計
-            questionGuide = `## 今聞くべきこと
-次の親質問「${currentParent.question}」に移ります。
-**前の会話で判明した情報を踏まえて、この質問を最適化してください。**
-前の会話の流れから自然につなげること。
+# 質問スタイル（MGUに連動して切り替え）
 
-例: 前の会話で「自分の思考を整理したい」と判明していた場合、
-「なぜ"専用"なのか」を聞く際に →
-「思考の整理のためなんだね。ちなみに、"専用"って言ってたけど、どんなところが自分だけ向けだと嬉しい？」`;
-        } else if (activeChildren) {
-            // 子質問がある → 子質問を深掘り
-            questionGuide = `## 今聞くべきこと
-親質問「${currentParent.question}」を深掘り中。
-未解決の子質問:
-${activeChildren}
+## MGU 0〜59%（open型）: 情報収集フェーズ
+あなたはまだ何もわかっていない。ユーザーの言葉をそのまま引き出す。**解釈を一切加えない**。
+- 文頭: 「なんで」「どういう意味で」「具体的にどういう状況？」
+- 文末: 「？」のみ（選択肢・誘導ワード禁止）
+- トーン: 率直・シンプル・一文
 
-${focus.child_question ? `次に聞く子質問: 「${focus.child_question}」` : ''}
-${focus.subjective_word ? `深掘り対象の主観語: 「${focus.subjective_word}」` : ''}`;
-        }
-    }
-
-    const remainingInfo = pendingParents.length > 0
-        ? `\n## 後で聞く予定の質問（${pendingParents.length}個残り）\n${pendingParents.map(q => `- ${q.question}`).join('\n')}`
-        : '';
-
-    const system = `あなたは信頼できる先輩PdMです。後輩の壁打ち相手として、温かく、でも鋭い1つの質問をしてください。
-
-## あなたの性格
-- カジュアルで親しみやすい口調
-- 相手の回答を具体的に受け止めてから、別の角度の質問をする（最重要）
-- 短く、核心をつく
-- 手段（How）や仕様（What）には踏み込まない
-
-## 回答の汲み取り方（最重要）
-ユーザーが回答したら、その内容を**具体的に**受け止めてから次に進む。
-
-良い例:
-- 回答「AIを使いこなせる人を増やしたいから」
-  → 「なるほど、AIリテラシーの底上げかー。ちなみに"子供向け"にしたのは何かある？」
-  （回答内容を要約 + 別の角度で質問）
-
-悪い例:
-- 回答「選択肢を増やしたい」
-  → 「どんな選択肢を増やしたい？」（同じ角度で深掘り = くどい）
-  → 「その選択肢って具体的には？」（同じ角度 = しつこいと感じる）
-
-**ルール**: ユーザーの回答と同じ角度・同じテーマでさらに聞き返すのは禁止。
-回答を受け止めたら、まだ聞いていない別の角度に移る。
+## MGU 60〜79%（hypothesis型）: 仮説確認フェーズ
+あなたはある程度わかってきた。自分の解釈が正しいかを確認する。ユーザーに修正チャンスを与える。
+- 文頭: 「つまり〇〇ってこと？」「こういうことをイメージしてる？」
+- 文末: 「〜かな？」「〜ってこと？」（断言禁止、やわらかく締める）
+- トーン: 一緒に答えを見つけている感覚
+- 補足解釈の分量: 1〜2文以内
 
 ${contextSection}
 
-${questionGuide}
-${remainingInfo}
+## Plannerからの指示
+- 現在の親質問: ${currentParent?.question || '（なし）'}
+- 次に聞くべきこと: ${focus.next_question || '（Plannerが指定）'}
+- 期待される情報利得: ${focus.expected_information_gain || '（未指定）'}
+- 残りの親質問: ${pendingCount}個
 
-## 絶対禁止
-- 「つまり」で始める
-- 「〜ということでしょうか？」で終わる
-- 「〜の理由は何ですか？」（理由を直接聞くのはNG）
-- ユーザーの発話をほぼそのままオウム返しする
-- 「理由」「必要」「特別」という単語
-- 専門用語: ボトルネック, 構造, 乖離, 意思決定, 前提, 条件, ニーズ
-- カウンセラー語: 苦痛, 感じる, つらい, 悩み, 大変, つまずく
+# 共通ルール
+- 1ターン1質問（Miller's Law）
+- ユーザーが使った言葉・表現をそのまま活用する（ドメイン語彙適応）
+- How/What語の混入禁止（cognitive_filter準拠）
+- JSON・スコア・メタ情報の漏洩禁止
 - How語: ${howWords || 'なし'}
-- 機能・要件・仕様の話
-- JSON, スコア, メタ情報
 
-## 応答フォーマット
-「受け止め + 質問」の形で1-2文。
+# 禁止語
+- カウンセラー語: 苦痛, 感じる, つらい, 悩み, 大変, つまずく
 
-良い例:
-- 「壁打ちAIかー、面白いね！そもそもなんでそれを作ろうと思ったの？」
-- 「なるほどね。ちなみに"専用"って言ってたけど、どんなところが自分だけ向けだと嬉しい？」
-- 「そっかー。今のやり方だと、何が足りない感じ？」
-
-テキストのみ出力。`;
+1-2文でテキストのみ出力。`;
 
     const user = `ユーザーの最新発話: "${userMessage || ''}"
-質問の方向: ${focus.focus_direction || '未定'}
-主観語: ${focus.subjective_word || '（なし）'}
-主題: ${focus.topic_noun || '（未定）'}`;
+question_type: ${questionType}
+MGU: ${mgu}%`;
 
     return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
