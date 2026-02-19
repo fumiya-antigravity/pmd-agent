@@ -72,6 +72,11 @@ const ClarixApp = (() => {
                 handleSend();
             }
         });
+        // Shift+Enter改行時のリサイズ
+        el.userInput.addEventListener('keyup', () => {
+            el.userInput.style.height = 'auto';
+            el.userInput.style.height = Math.min(el.userInput.scrollHeight, 120) + 'px';
+        });
         el.debugToggle.addEventListener('change', e => {
             el.debugPanel.style.display = e.target.checked ? 'block' : 'none';
         });

@@ -14,6 +14,36 @@ function getSupabase() {
 }
 
 // ===================================================
+// DB操作ヘルパー（エラーを必ずチェック）
+// ===================================================
+async function dbInsert(supabase, table, row) {
+    const { data, error } = await supabase.from(table).insert(row).select().maybeSingle();
+    if (error) {
+        console.error(`[dbInsert:${table}]`, error);
+        throw new Error(`DB Insert失敗 (${table}): ${error.message}`);
+    }
+    return data;
+}
+
+async function dbUpdate(supabase, table, updates, eqCol, eqVal) {
+    const { data, error } = await supabase.from(table).update(updates).eq(eqCol, eqVal).select().maybeSingle();
+    if (error) {
+        console.error(`[dbUpdate:${table}]`, error);
+        throw new Error(`DB Update失敗 (${table}): ${error.message}`);
+    }
+    return data;
+}
+
+async function dbUpsert(supabase, table, row, onConflict) {
+    const { data, error } = await supabase.from(table).upsert(row, { onConflict }).select().maybeSingle();
+    if (error) {
+        console.error(`[dbUpsert:${table}]`, error);
+        // upsertは致命的ではないのでログのみ
+    }
+    return data;
+}
+
+// ===================================================
 // LLM呼び出し
 // ===================================================
 async function callOpenAI(messages, jsonMode = true, maxTokens = 4000) {
@@ -68,11 +98,63 @@ function extractKeywords(text) {
 }
 
 // ===================================================
+// アンカー取得 or 復元
+// 初回insertが何らかの理由で失敗した場合も復元可能にする
+// ===================================================
+async function ensureAnchor(supabase, session_id, originalMessage) {
+    // まず取得を試みる
+    const { data: existing, error: fetchErr } = await supabase
+        .from('session_anchors').select('*').eq('session_id', session_id).maybeSingle();
+
+    if (fetchErr) {
+        console.error('[ensureAnchor] fetch error:', fetchErr);
+    }
+
+    if (existing) return existing;
+
+    // 存在しない場合: 復元 (初回insertが失敗していたケース)
+    // originalMessageが提供されている場合のみ復元可能
+    if (!originalMessage) {
+        // messagesから最初のユーザーメッセージを取得して復元
+        const { data: firstMsg } = await supabase
+            .from('messages').select('content').eq('session_id', session_id)
+            .eq('role', 'user').order('created_at', { ascending: true }).limit(1).maybeSingle();
+        originalMessage = firstMsg?.content || '';
+    }
+
+    if (!originalMessage) {
+        console.warn('[ensureAnchor] アンカー復元不可: ユーザーメッセージなし');
+        return null;
+    }
+
+    console.warn('[ensureAnchor] アンカーが欠損 → 自動復元を実行');
+    const keywords = extractKeywords(originalMessage);
+    try {
+        const restored = await dbInsert(supabase, 'session_anchors', {
+            session_id,
+            original_message: originalMessage,
+            core_keywords: keywords,
+            initial_purpose: '',
+        });
+        return restored;
+    } catch (e) {
+        console.error('[ensureAnchor] 復元失敗:', e);
+        // フォールバック: メモリ上のオブジェクトを返す
+        return {
+            session_id,
+            original_message: originalMessage,
+            core_keywords: keywords,
+            initial_purpose: '',
+        };
+    }
+}
+
+// ===================================================
 // Role A (Planner) — 外部設計 §5.1
 // ===================================================
 function buildPlannerPrompt({ userMessage, anchor, latestGoal, confirmedInsights, history, turn, managerCorrection }) {
     const anchorSection = anchor
-        ? `## アンカー\n- original_message: "${anchor.original_message}"\n- core_keywords: ${JSON.stringify(anchor.core_keywords)}\n- initial_purpose: "${anchor.initial_purpose}"`
+        ? `## アンカー\n- original_message: "${anchor.original_message}"\n- core_keywords: ${JSON.stringify(anchor.core_keywords || [])}\n- initial_purpose: "${anchor.initial_purpose || ''}"`
         : '## アンカー\n（初回ターン）';
 
     const previousState = latestGoal
@@ -123,8 +205,13 @@ function buildPlannerPrompt({ userMessage, anchor, latestGoal, confirmedInsights
 
 // ===================================================
 // Role E (Manager) — 外部設計 §5.5
+// anchor が null の場合は安全にスキップ
 // ===================================================
 function buildManagerPrompt({ plannerOutput, anchor, previousInterviewerQuestion }) {
+    // anchor が null の場合は Manager をスキップするためのガード
+    const anchorMsg = anchor?.original_message || '（不明）';
+    const anchorKeywords = anchor?.core_keywords || [];
+
     const system = `あなたは Manager AI（Role E）です。Planner出力の逸脱を検出してください。
 
 チェック:
@@ -141,7 +228,7 @@ function buildManagerPrompt({ plannerOutput, anchor, previousInterviewerQuestion
 
 alignment_score<70→drift_detected=true, correctionは必須`;
 
-    const user = `## アンカー\n- original_message: "${anchor.original_message}"\n- core_keywords: ${JSON.stringify(anchor.core_keywords)}\n\n## Planner出力\n${JSON.stringify(plannerOutput, null, 2)}\n\n## 前回Interviewer質問\n${previousInterviewerQuestion || '（turn 0: なし）'}`;
+    const user = `## アンカー\n- original_message: "${anchorMsg}"\n- core_keywords: ${JSON.stringify(anchorKeywords)}\n\n## Planner出力\n${JSON.stringify(plannerOutput, null, 2)}\n\n## 前回Interviewer質問\n${previousInterviewerQuestion || '（turn 0: なし）'}`;
 
     return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
@@ -229,46 +316,91 @@ export default async function handler(req, res) {
         }
 
         // ── DB読み込み ──
-        const { data: anchorRow } = await supabase.from('session_anchors').select('*').eq('session_id', session_id).maybeSingle();
-        const { data: allMsgs } = await supabase.from('messages').select('*').eq('session_id', session_id).order('created_at', { ascending: true });
+        const { data: allMsgs, error: msgErr } = await supabase
+            .from('messages').select('*').eq('session_id', session_id).order('created_at', { ascending: true });
+        if (msgErr) console.error('[process] messages取得エラー:', msgErr);
         const messages = allMsgs || [];
         const history = messages.slice(-20);
-        const { data: goalRows } = await supabase.from('goal_history').select('*').eq('session_id', session_id).order('turn_number', { ascending: false }).limit(1);
-        const latestGoal = goalRows?.[0] || null;
-        const { data: existingInsights } = await supabase.from('confirmed_insights').select('*').eq('session_id', session_id).order('strength', { ascending: false });
-        const insights = existingInsights || [];
         const turn = messages.filter(m => m.role === 'user').length;
+
+        const { data: goalRows, error: goalErr } = await supabase
+            .from('goal_history').select('*').eq('session_id', session_id).order('turn_number', { ascending: false }).limit(1);
+        if (goalErr) console.error('[process] goal_history取得エラー:', goalErr);
+        const latestGoal = goalRows?.[0] || null;
+
+        const { data: existingInsights, error: insErr } = await supabase
+            .from('confirmed_insights').select('*').eq('session_id', session_id).order('strength', { ascending: false });
+        if (insErr) console.error('[process] confirmed_insights取得エラー:', insErr);
+        const insights = existingInsights || [];
+
         const prevInterviewerMsg = [...messages].reverse().find(m => m.role === 'assistant')?.content ?? null;
 
-        // メッセージ保存
-        await supabase.from('messages').insert({ session_id, role: 'user', content: user_message, turn_number: turn, metadata: { turn } });
+        // メッセージ保存（エラーチェックあり）
+        try {
+            await dbInsert(supabase, 'messages', { session_id, role: 'user', content: user_message, turn_number: turn, metadata: { turn } });
+        } catch (e) {
+            console.error('[process] ユーザーメッセージ保存失敗:', e);
+            // 保存失敗しても処理は続行（会話は成立させる）
+        }
 
         const MAX_SUB_QUESTION_TURNS = 10;
 
         // ── 初回ターン ──
-        if (turn === 0 && !anchorRow) {
-            const planReply = await callOpenAI(buildPlannerPrompt({ userMessage: user_message, anchor: null, latestGoal: null, confirmedInsights: [], history: [], turn: 0 }));
+        if (turn === 0) {
+            // アンカー取得 or 作成
+            let anchor = await ensureAnchor(supabase, session_id, user_message);
+
+            const planReply = await callOpenAI(buildPlannerPrompt({ userMessage: user_message, anchor, latestGoal: null, confirmedInsights: [], history: [], turn: 0 }));
             const plan = parseLLMJson(planReply);
             if (!plan) return res.status(500).json({ error: 'Planner出力パースエラー' });
 
-            const allKeywords = extractKeywords(user_message);
-            await supabase.from('session_anchors').insert({
-                session_id, original_message: user_message,
-                core_keywords: allKeywords, initial_purpose: plan.sessionPurpose || '',
-            });
+            // アンカーがまだない場合（ensureAnchorでDBinsertに失敗 + fallbackオブジェクトだった場合）
+            // initial_purposeを更新
+            if (anchor && !anchor.id) {
+                // メモリ上のフォールバックだった場合、再度insert試行
+                const keywords = extractKeywords(user_message);
+                try {
+                    anchor = await dbInsert(supabase, 'session_anchors', {
+                        session_id, original_message: user_message,
+                        core_keywords: keywords, initial_purpose: plan.sessionPurpose || '',
+                    });
+                } catch (e) {
+                    console.warn('[process] アンカー保存リトライも失敗:', e);
+                }
+            } else if (anchor && anchor.id && !anchor.initial_purpose) {
+                // existing anchor but initial_purpose が空 → 更新
+                try {
+                    await dbUpdate(supabase, 'sessions_anchors_purpose', {}, '', '');
+                } catch (e) { /* ignore */ }
+            }
 
-            await supabase.from('goal_history').insert({
-                session_id, turn_number: 0, goal_text: plan.sessionPurpose || '',
-                session_purpose: plan.sessionPurpose || '', mgu: plan.main_goal_understanding || 0,
-                sqc: plan.sub_question_clarity || 0, question_type: plan.question_type || 'open',
-                cognitive_filter: plan.cognitive_filter || {}, why_completeness_score: plan.why_completeness_score || 0,
-                active_sub_questions: plan.active_sub_questions || [], manager_alignment_score: 100,
-                turn: 0, raw_planner_output: plan,
-            });
+            // goal_history 保存
+            try {
+                await dbInsert(supabase, 'goal_history', {
+                    session_id, turn_number: 0, goal_text: plan.sessionPurpose || '',
+                    session_purpose: plan.sessionPurpose || '', mgu: plan.main_goal_understanding || 0,
+                    sqc: plan.sub_question_clarity || 0, question_type: plan.question_type || 'open',
+                    cognitive_filter: plan.cognitive_filter || {}, why_completeness_score: plan.why_completeness_score || 0,
+                    active_sub_questions: plan.active_sub_questions || [], manager_alignment_score: 100,
+                    turn: 0, raw_planner_output: plan,
+                });
+            } catch (e) {
+                console.error('[process] goal_history保存失敗:', e);
+            }
 
             const question = await callOpenAI(buildInterviewerPrompt(plan), false, 500);
-            await supabase.from('messages').insert({ session_id, role: 'assistant', content: question, turn_number: 0, metadata: { turn: 0 } });
-            await supabase.from('sessions').update({ phase: 'CONVERSATION' }).eq('id', session_id);
+
+            try {
+                await dbInsert(supabase, 'messages', { session_id, role: 'assistant', content: question, turn_number: 0, metadata: { turn: 0 } });
+            } catch (e) {
+                console.error('[process] assistant message保存失敗:', e);
+            }
+
+            try {
+                await dbUpdate(supabase, 'sessions', { phase: 'CONVERSATION' }, 'id', session_id);
+            } catch (e) {
+                console.error('[process] sessions phase更新失敗:', e);
+            }
 
             return res.status(200).json({
                 phase: 'CONVERSATION', message: question, turn: 0,
@@ -276,17 +408,21 @@ export default async function handler(req, res) {
             });
         }
 
-        const anchor = anchorRow;
+        // ── ターン1以降: アンカーを確実に取得 ──
+        const anchor = await ensureAnchor(supabase, session_id, null);
+        if (!anchor) {
+            return res.status(500).json({ error: 'ANCHOR_NOT_FOUND: セッションのアンカーが見つかりません。新しいセッションを作成してください。' });
+        }
 
         // ── ターン上限チェック ──
         if (turn >= MAX_SUB_QUESTION_TURNS) {
-            const sliderData = synthesize(insights, anchor?.original_message || '');
+            const sliderData = synthesize(insights, anchor.original_message || '');
             if (sliderData.length === 0) {
                 const q = await callOpenAI(buildInterviewerPrompt({ sessionPurpose: latestGoal?.session_purpose || '', question_type: 'hypothesis', active_sub_questions: [], cognitive_filter: {}, next_question_focus: { target_layer: 'value', focus: '最終確認' } }), false, 500);
-                await supabase.from('messages').insert({ session_id, role: 'assistant', content: q, turn_number: turn });
+                try { await dbInsert(supabase, 'messages', { session_id, role: 'assistant', content: q, turn_number: turn }); } catch (e) { /* ignore */ }
                 return res.status(200).json({ phase: 'CONVERSATION', message: q, turn, debug: { mgu: 80, forced: true } });
             }
-            await supabase.from('sessions').update({ phase: 'SLIDER' }).eq('id', session_id);
+            try { await dbUpdate(supabase, 'sessions', { phase: 'SLIDER' }, 'id', session_id); } catch (e) { /* ignore */ }
             return res.status(200).json({ phase: 'SLIDER', insights: sliderData, session_purpose: latestGoal?.session_purpose || '', turn });
         }
 
@@ -316,24 +452,28 @@ export default async function handler(req, res) {
         }
 
         // ── DB保存 ──
-        await supabase.from('goal_history').insert({
-            session_id, turn_number: turn, goal_text: plan.sessionPurpose || '',
-            session_purpose: plan.sessionPurpose || '', mgu: plan.main_goal_understanding || 0,
-            sqc: plan.sub_question_clarity || 0, question_type: plan.question_type || 'open',
-            cognitive_filter: plan.cognitive_filter || {}, why_completeness_score: plan.why_completeness_score || 0,
-            active_sub_questions: plan.active_sub_questions || [], manager_alignment_score: mgr.alignment_score || 100,
-            turn, raw_planner_output: plan, raw_manager_output: mgr,
-        });
+        try {
+            await dbInsert(supabase, 'goal_history', {
+                session_id, turn_number: turn, goal_text: plan.sessionPurpose || '',
+                session_purpose: plan.sessionPurpose || '', mgu: plan.main_goal_understanding || 0,
+                sqc: plan.sub_question_clarity || 0, question_type: plan.question_type || 'open',
+                cognitive_filter: plan.cognitive_filter || {}, why_completeness_score: plan.why_completeness_score || 0,
+                active_sub_questions: plan.active_sub_questions || [], manager_alignment_score: mgr.alignment_score || 100,
+                turn, raw_planner_output: plan, raw_manager_output: mgr,
+            });
+        } catch (e) {
+            console.error('[process] goal_history保存失敗:', e);
+        }
 
         // confirmed_insights upsert
         if (plan.confirmed_insights?.length > 0) {
             for (const ins of plan.confirmed_insights) {
                 if ((ins.confirmation_strength || 0) > 0) {
-                    await supabase.from('confirmed_insights').upsert({
+                    await dbUpsert(supabase, 'confirmed_insights', {
                         session_id, label: ins.label, layer: ins.layer,
                         strength: ins.strength || 50, confirmation_strength: ins.confirmation_strength,
                         tag: (ins.strength || 50) >= 70 ? 'primary' : 'supplementary', turn,
-                    }, { onConflict: 'session_id,label' });
+                    }, 'session_id,label');
                 }
             }
         }
@@ -346,17 +486,17 @@ export default async function handler(req, res) {
             const { data: latestInsights } = await supabase.from('confirmed_insights').select('*').eq('session_id', session_id).order('strength', { ascending: false });
             if (!latestInsights || latestInsights.length === 0) {
                 const question = await callOpenAI(buildInterviewerPrompt(plan), false, 500);
-                await supabase.from('messages').insert({ session_id, role: 'assistant', content: question, turn_number: turn });
+                try { await dbInsert(supabase, 'messages', { session_id, role: 'assistant', content: question, turn_number: turn }); } catch (e) { /* ignore */ }
                 return res.status(200).json({ phase: 'CONVERSATION', message: question, turn, debug: buildDebug(plan, mgr) });
             }
-            const sliderData = synthesize(latestInsights, anchor?.original_message || '');
-            await supabase.from('sessions').update({ phase: 'SLIDER' }).eq('id', session_id);
+            const sliderData = synthesize(latestInsights, anchor.original_message || '');
+            try { await dbUpdate(supabase, 'sessions', { phase: 'SLIDER' }, 'id', session_id); } catch (e) { /* ignore */ }
             return res.status(200).json({ phase: 'SLIDER', insights: sliderData, session_purpose: plan.sessionPurpose, turn, debug: buildDebug(plan, mgr) });
         }
 
         // ── 会話継続 ──
         const question = await callOpenAI(buildInterviewerPrompt(plan), false, 500);
-        await supabase.from('messages').insert({ session_id, role: 'assistant', content: question, turn_number: turn });
+        try { await dbInsert(supabase, 'messages', { session_id, role: 'assistant', content: question, turn_number: turn }); } catch (e) { /* ignore */ }
 
         return res.status(200).json({ phase: 'CONVERSATION', message: question, turn, debug: buildDebug(plan, mgr) });
 
