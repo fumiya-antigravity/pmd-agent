@@ -158,7 +158,7 @@ function buildPlannerPrompt({ userMessage, anchor, latestGoal, confirmedInsights
         : '## アンカー\n（初回ターン）';
 
     const previousState = latestGoal
-        ? `## 前回の状態\n- MGU: ${latestGoal.mgu || 0}\n- SQC: ${latestGoal.sqc || 0}\n- sessionPurpose: "${latestGoal.session_purpose || ''}"\n- question_type: ${latestGoal.question_type || 'open'}\n- question_tree: ${JSON.stringify(latestGoal.active_sub_questions || [])}`
+        ? `## 前回の状態\n- why_completeness_score: ${latestGoal.why_completeness_score || 0}\n- sessionPurpose: "${latestGoal.session_purpose || ''}"\n- question_tree: ${JSON.stringify(latestGoal.tasks || [])}`
         : '## 前回の状態\n（初回）';
 
     const insightsSection = confirmedInsights.length > 0
@@ -449,11 +449,10 @@ export default async function handler(req, res) {
             try {
                 await dbInsert(supabase, 'goal_history', {
                     session_id, turn_number: 0, goal_text: plan.sessionPurpose || '',
-                    session_purpose: plan.sessionPurpose || '', mgu: plan.main_goal_understanding || 0,
-                    sqc: plan.sub_question_clarity || 0, question_type: plan.question_type || 'open',
+                    session_purpose: plan.sessionPurpose || '',
                     cognitive_filter: plan.cognitive_filter || {}, why_completeness_score: plan.why_completeness_score || 0,
-                    active_sub_questions: plan.question_tree || [], manager_alignment_score: 100,
-                    turn: 0, raw_planner_output: plan,
+                    tasks: plan.question_tree || [],
+                    abstract_goal: plan.sessionPurpose || '',
                 });
             } catch (e) {
                 console.error('[process] goal_history保存失敗:', e);
@@ -526,11 +525,10 @@ export default async function handler(req, res) {
         try {
             await dbInsert(supabase, 'goal_history', {
                 session_id, turn_number: turn, goal_text: plan.sessionPurpose || '',
-                session_purpose: plan.sessionPurpose || '', mgu: plan.main_goal_understanding || 0,
-                sqc: plan.sub_question_clarity || 0, question_type: plan.question_type || 'open',
+                session_purpose: plan.sessionPurpose || '',
                 cognitive_filter: plan.cognitive_filter || {}, why_completeness_score: plan.why_completeness_score || 0,
-                active_sub_questions: plan.question_tree || [], manager_alignment_score: mgr.alignment_score || 100,
-                turn, raw_planner_output: plan, raw_manager_output: mgr,
+                tasks: plan.question_tree || [],
+                abstract_goal: plan.sessionPurpose || '',
             });
         } catch (e) {
             console.error('[process] goal_history保存失敗:', e);
