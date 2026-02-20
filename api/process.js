@@ -248,7 +248,7 @@ alignment_score<70→drift_detected=true, correctionは必須`;
 // Role B (Interviewer) — PRD §3.2 Role B 準拠
 // Planner(Role A)のJSON→ユーザーへの自然な「先輩の言葉」に変換
 // ===================================================
-function buildInterviewerPrompt(plannerOutput, userMessage) {
+function buildInterviewerPrompt(plannerOutput, userMessage, history) {
     const howWords = (plannerOutput.cognitive_filter?.detected_how || []).join(', ');
     const mgu = plannerOutput.main_goal_understanding || 0;
     const focus = plannerOutput.current_focus || {};
@@ -271,6 +271,12 @@ function buildInterviewerPrompt(plannerOutput, userMessage) {
 ${resolvedParents}`;
     }
 
+    // 会話履歴からユーザーの過去回答を抽出
+    const userAnswers = (history || [])
+        .filter(m => m.role === 'user')
+        .map(m => m.content)
+        .join('\n');
+
     const system = `先輩PdMとして、Plannerの指示を自然な1つの質問に変換。
 **質問の内容はPlannerのnext_questionに従う。自分で質問を設計しない。**
 
@@ -284,6 +290,13 @@ ${contextSection}
 - 親質問: ${currentParent?.question || '（なし）'}
 - 次に聞くこと: ${focus.next_question || '（指定なし）'}
 - 残り: ${pendingCount}個
+
+# 重複チェック（最重要）
+**質問を出力する前に、以下のユーザー過去回答を確認。既に回答済みの内容を聞き直してはならない。**
+回答済みなら、まだ聞いていない別の角度に変換すること。
+--- ユーザー過去回答 ---
+${userAnswers || '（初回ターン）'}
+---
 
 # ルール
 - 1ターン1質問、ユーザーの語彙を使う
@@ -423,7 +436,7 @@ export default async function handler(req, res) {
                 console.error('[process] goal_history保存失敗:', e);
             }
 
-            const question = await callOpenAI(buildInterviewerPrompt(plan, user_message), false, 500);
+            const question = await callOpenAI(buildInterviewerPrompt(plan, user_message, []), false, 500);
 
             try {
                 await dbInsert(supabase, 'messages', { session_id, role: 'assistant', content: question, turn_number: 0, metadata: { turn: 0 } });
@@ -520,7 +533,7 @@ export default async function handler(req, res) {
         if (plan.main_goal_understanding >= 80 && allResolved) {
             const { data: latestInsights } = await supabase.from('confirmed_insights').select('*').eq('session_id', session_id).order('strength', { ascending: false });
             if (!latestInsights || latestInsights.length === 0) {
-                const question = await callOpenAI(buildInterviewerPrompt(plan, user_message), false, 500);
+                const question = await callOpenAI(buildInterviewerPrompt(plan, user_message, history), false, 500);
                 try { await dbInsert(supabase, 'messages', { session_id, role: 'assistant', content: question, turn_number: turn }); } catch (e) { /* ignore */ }
                 return res.status(200).json({ phase: 'CONVERSATION', message: question, turn, debug: buildDebug(plan, mgr) });
             }
@@ -530,7 +543,7 @@ export default async function handler(req, res) {
         }
 
         // ── 会話継続 ──
-        const question = await callOpenAI(buildInterviewerPrompt(plan, user_message), false, 500);
+        const question = await callOpenAI(buildInterviewerPrompt(plan, user_message, history), false, 500);
         try { await dbInsert(supabase, 'messages', { session_id, role: 'assistant', content: question, turn_number: turn }); } catch (e) { /* ignore */ }
 
         return res.status(200).json({ phase: 'CONVERSATION', message: question, turn, debug: buildDebug(plan, mgr) });
