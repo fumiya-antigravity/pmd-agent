@@ -286,10 +286,9 @@ function buildInterviewerPrompt(plannerOutput, userMessage, history) {
 ${resolvedParents}`;
     }
 
-    // 会話履歴からユーザーの過去回答を抽出
-    const userAnswers = (history || [])
-        .filter(m => m.role === 'user')
-        .map(m => m.content)
+    // 会話履歴を構造化
+    const pastConversation = (history || [])
+        .map(m => `[${m.role === 'user' ? 'ユーザー' : 'AI'}] ${m.content}`)
         .join('\n');
 
     const system = `先輩PdMとして、Plannerの指示を自然な1つの質問に変換。
@@ -314,10 +313,12 @@ ${contextSection}
 - 残り: ${pendingCount}個
 
 # 重複チェック（最重要）
-**質問を出力する前に、以下のユーザー過去回答を確認。既に回答済みの内容を聞き直してはならない。**
-回答済みなら、まだ聞いていない別の角度に変換すること。
---- ユーザー過去回答 ---
-${userAnswers || '（初回ターン）'}
+**出力前に以下の過去会話を必ず確認。**
+1. AIが既に聞いた質問と同じ or 似た質問は絶対禁止
+2. ユーザーが既に回答した内容を聞き直すのは絶対禁止
+違反する場合は、まだ聞いていない別の角度に変換すること。
+--- 過去会話 ---
+${pastConversation || '（初回ターン）'}
 ---
 
 # ルール
