@@ -368,16 +368,41 @@ MGU ≥ 80% → Phase 0.5 へ移行
   "why_completeness_score": 65,
   "sessionPurpose": "要件定義のWhyが若手に伝わっていない構造的問題を解決したい",
   "question_type": "hypothesis",
-  "active_sub_questions": [
+  "dimension_status": {
+    "why": "partial",
+    "who": "unknown",
+    "when": "unknown",
+    "where": "unknown"
+  },
+  "question_tree": [
     {
-      "question": "要件定義を読み解けないとはどういう状況か",
-      "layer": "consequence",
-      "status": "active"
+      "id": 1,
+      "question": "なぜ壁打ちAIを作りたいのか",
+      "dimension": "why",
+      "priority": 1,
+      "status": "exploring",
+      "resolved_context": null,
+      "children": [
+        {
+          "question": "要件定義を読み解けないとはどういう状況か",
+          "layer": "consequence",
+          "status": "active",
+          "information_gain": "問題の具体的構造が判明する"
+        }
+      ]
     }
   ],
+  "current_focus": {
+    "parent_id": 1,
+    "dimension": "why",
+    "next_question": "要件定義を読み解けないとはどういう状況か",
+    "expected_information_gain": "問題の具体的構造が判明する",
+    "layer": "consequence"
+  },
   "confirmed_insights": [
     {
       "label": "先輩のHow要件定義がジュニアに届いていない",
+      "dimension": "why",
       "layer": "consequence",
       "strength": 85,
       "confirmation_strength": 0.7,
@@ -385,14 +410,13 @@ MGU ≥ 80% → Phase 0.5 へ移行
     }
   ],
   "cognitive_filter": {
-    "detected_how_what": ["Claude", "リポジトリ"]
-  },
-  "next_question_focus": {
-    "target_layer": "value",
-    "focus": "なぜそのツールが必要だと感じたのか、根本動機"
+    "detected_how": ["Claude", "リポジトリ"],
+    "instruction": "How語を検出。記録のみで深掘りせずWhy/Who/When/Whereに戻す"
   }
 }
 ```
+
+> **旧スキーマとの対応**: `active_sub_questions` → `question_tree[].children`, `next_question_focus` → `current_focus`, `detected_how_what` → `detected_how`（Whatは除外）
 
 ---
 
@@ -552,13 +576,16 @@ base_depth:
 
 [Role A チェック]
   - sessionPurpose が元メッセージとのコサイン類似度 < 0.7 → drift_detected = true
-  - active_sub_questions が sessionPurpose と無関係 → sub_question_drift = true
+  - question_tree が sessionPurpose と無関係 → sub_question_drift = true
   - MGUが急激に上昇（+30 over 1 turn）→ 計算の妥当性を再評価
+  - current_focus の next_question に Howキーワードが含まれる → cognitive_filter 違反
+    （検出キーワード: 機能、サポート、実装、技術、ツール、手段、方法、やり方、仕組み、設計）
 
 [Role B チェック]
-  - Interviewerの質問文がHow/What語を含む → cognitive_filter 違反アラート
+  - Interviewerの質問文にHowキーワードを含む → cognitive_filter 違反アラート（絶対禁止）
   - 質問が2つ以上含まれる → ミラーの法則違反アラート
   - 感情語（苦痛/つらい/悩み等）が含まれる → キャラクター違反アラート
+  - openモードで「つまり」が含まれる → モード違反アラート
 
 [会話全体チェック]
   - 直近3ターンの会話トピックが元の問いから逸脱 → リダイレクト指示を生成
@@ -702,7 +729,7 @@ OK: 「情報の構造問題」
 ### Phase 0（会話フェーズ）— 毎ターンのデータフロー
 
 ```
-Turn N のデータフロー（全8ステップ）:
+Turn N のデータフロー（全9ステップ）:
 
   [1] ユーザーのテキスト回答
         → pipeline.js で受信
@@ -711,28 +738,36 @@ Turn N のデータフロー（全8ステップ）:
   [2] tasks[i].result
         → IntentCrew.buildSessionMessages() で answeredSummary 生成  ✅ 実装済み
 
-  [3] answeredSummary + anchor（不変）
-        → IntentPrompt.buildSession() でPlannerプロンプトに挿入      ⚠️ anchor追加が必要（Phase A）
+  [2.5] prevAIQuestion（前回Interviewerの質問テキスト）を取得
+        → DBまたは会話履歴から前回のAI質問を取得                ✅ 実装済み
+        → Plannerに渡すことで「ユーザーの回答が何の回答か」を正確に把握
+
+  [3] answeredSummary + anchor（不変） + prevAIQuestion
+        → IntentPrompt.buildSession() でPlannerプロンプトに挿入      ✅ 実装済み
 
   [4] Role A（Planner）の出力
-        → MGU・SQC・question_type・confirmed_insights を毎ターン更新  ⚠️ 2軸スコア計算を新規実装（Phase A）
+        → MGU・SQC・question_type・dimension_status・confirmed_insights を毎ターン更新
         → sessionPurpose を毎ターン必須更新                          ✅ 実装済み
+        → cognitive_filter で Howキーワードを検出・記録               ✅ 実装済み
 
   [5] Role A 出力 → Role E（Manager）へ
-        → alignment_score 計算・drift チェック                       ⚠️ 新規実装（Phase A）
+        → alignment_score 計算・drift チェック                       ✅ 実装済み
+        → Howキーワード混入チェック                              ✅ 実装済み
         → drift_detected = false → 次ステップへ通過
         → drift_detected = true  → Role A に差し戻し（ループ）
 
   [6] Role E 通過後 → Role B（Interviewer）へ
-        → question_type に応じた質問文を生成                         ⚠️ キャラクター修正（Phase A）
+        → question_type + dimension に応じた質問文を生成         ✅ 実装済み
+        → 新次元移行時はopen（「つまり」禁止）、同次元深掘り時はhypothesis
+        → Howキーワード混入禁止チェック
         → 生成した質問をユーザーへ表示
 
   [7] confirmed_insights の蓄積
-        → confirmation_strength ≥ 0.7 の回答を confirmed_insights に追記  ⚠️ 新規実装（Phase A）
+        → confirmation_strength ≥ 0.7 の回答を confirmed_insights に追記  ✅ 実装済み
         → DBに永続化
 
   [8] MGU ≥ 80% 判定
-        → Phase 0.5 へ移行トリガー                                   ⚠️ 新規実装（Phase A）
+        → Phase 0.5 へ移行トリガー                                   ✅ 実装済み
 ```
 
 ### Phase 0.5（強調設定フェーズ）— 1回のみ実行
