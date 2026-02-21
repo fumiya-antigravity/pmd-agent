@@ -395,6 +395,9 @@ function buildSummaryPrompt(plannerOutput, anchor, history) {
 - **情報量を確保する**: 薄い・短いまとめはユーザーを不安にさせる
 - ユーザーの言葉を引用しながら構造的に整理する
 - Howには絶対に触れない（機能、実装方法、手段は一切書かない）
+- **以下のHow語はまとめ内でも使用禁止**: サポート、機能、実装、技術、ツール、手段、方法、仕組み、設計
+  - NG: 「〜をサポートするAI」→ OK: 「〜を明確にするためのAI」
+  - NG: 「壁打ちをサポートする」→ OK: 「壁打ちを通じて考えを整理する」
 - 質問は一切しない（「〜ですか？」は禁止）
 - 自然な先輩PdMの口調で書く`;
 
@@ -734,7 +737,8 @@ export default async function handler(req, res) {
         const whyResolved = dimStatus.why === 'resolved' || dimStatus.why === 'partial';
 
         // 3次元以上resolvedかつWhyが明確 → 構造的まとめを出す
-        if ((resolvedDimCount >= 3 && whyResolved) || (plan.main_goal_understanding >= 80 && allResolved)) {
+        // ただしturn < 3では早すぎるので質問を続ける（LLMのdimension_status誤判定対策）
+        if (turn >= 3 && ((resolvedDimCount >= 3 && whyResolved) || (plan.main_goal_understanding >= 80 && allResolved))) {
             console.log(`[/api/process] まとめ移行: resolved=${resolvedDimCount}/4, MGU=${plan.main_goal_understanding}`);
 
             // 構造的まとめを生成
