@@ -229,8 +229,16 @@ function buildPlannerPrompt({ userMessage, anchor, latestGoal, confirmedInsights
 - **未解決の次元が最優先。** 既にresolvedの次元は飛ばす
 - resolved条件: 全子質問が解決した場合のみ
 
-# 仮説確認後の進行
-ユーザーが仮説を肯定した場合:
+# 仮説確認後の進行（最重要）
+## 肯定キーワード検出
+ユーザーの回答に以下が含まれたら、現在の次元を**即座にresolved**にする:
+- 強い肯定: 「はい」「そうです」「まさに」「その通り」 → confirmation_strength=1.0 → **即resolved、次次元へ**
+- 中程度: 「大体あってます」「そんな感じ」 → confirmation_strength=0.7 → **resolved、次次元へ**
+- 弱い肯定: 「少し」「かもしれない」 → confirmation_strength=0.3 → 同次元で深掘り続行
+- 否定: 「違う」「そうじゃない」 → 仮説再生成
+
+## 次元移行の強制ルール
+ユーザーが肯定した場合:
 1. 現在のinsightをresolved
 2. **次は未解決の次元へ移行する**（同じ次元を掘り続けない）
    - Why確認後 → Who（「それって誰が使う想定？」）
@@ -238,7 +246,13 @@ function buildPlannerPrompt({ userMessage, anchor, latestGoal, confirmedInsights
    - When確認後 → Where（「どの業務・工程で？」）
    - 全次元確認後 → Whyを深掘り（結果層→価値観層）
 3. ネガティブフレーミング禁止: 「何が困る？」ではなく「何ができるようになる？」
-4. **新しい次元に移行するときは question_type = "open"** にすること（まだ情報がないので仮説を立てられない）
+4. **新しい次元に移行するときは question_type = "open"** にすること
+
+## 同次元ループ禁止（厳守）
+- **同じ次元でhypothesisを連続2回以上出してはいけない**
+- 1回仮説を出してユーザーが肯定したら → resolved、次次元へ
+- 1回仮説を出してユーザーが否定したら → openに戻して再質問
+- **「つまり、〇〇ってこと？」の後にまた「つまり、∆∆ってこと？」は絶対禁止**
 
 # anchor常時チェック
 全質問はanchorに紐づくこと。
@@ -262,8 +276,9 @@ function buildPlannerPrompt({ userMessage, anchor, latestGoal, confirmedInsights
   "cognitive_filter": {"detected_how":[],"instruction":"<説明>"}
 }
 # MGUとquestion_typeの決定ルール
-# **新しい5W次元に移行する場合 → 常にopen**（その次元の情報がまだないから）
-# 同じ5W次元内で深掘り: MGU<60→open, MGU≥60→hypothesis
+# **新しい次元に移行する場合 → 常にopen**（その次元の情報がまだないから）
+# 同じ次元内で深掘り: MGU<60→open, MGU≥60→hypothesis
+# **同次元でhypothesisを連続2回以上出してはいけない**
 # confirmed_insights: 差分のみ${correctionSection}`;
 
     const prevQuestionSection = prevAIQuestion
