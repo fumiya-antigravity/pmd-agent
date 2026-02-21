@@ -152,7 +152,7 @@ async function ensureAnchor(supabase, session_id, originalMessage) {
 // ===================================================
 // Role A (Planner) — 外部設計 §5.1
 // ===================================================
-function buildPlannerPrompt({ userMessage, anchor, latestGoal, confirmedInsights, history, turn, managerCorrection }) {
+function buildPlannerPrompt({ userMessage, anchor, latestGoal, confirmedInsights, history, turn, managerCorrection, prevAIQuestion }) {
     const anchorSection = anchor
         ? `## アンカー\n- original_message: "${anchor.original_message}"\n- core_keywords: ${JSON.stringify(anchor.core_keywords || [])}\n- initial_purpose: "${anchor.initial_purpose || ''}"`
         : '## アンカー\n（初回ターン）';
@@ -205,6 +205,14 @@ function buildPlannerPrompt({ userMessage, anchor, latestGoal, confirmedInsights
 - 結果(+10): それが実現すると何が変わるか
 - 価値観(+20): 最終的にどうありたいか
 
+# 回答吸収（最重要）
+**ユーザーの最新メッセージは、前回のAI質問への回答である。**
+必ず以下を実行してから次の質問を考えること:
+1. 前回のAI質問と、ユーザーの回答を照合する
+2. 回答から得られた情報を question_tree の該当する5W次元に吸収する
+3. 吸収した情報を confirmed_insights に追加する
+4. **吸収済みの内容と同じ or 似た質問は絶対に生成しない**
+
 # 質問ツリー
 - 初回: 5Wそれぞれを親質問として生成、Why > Who > When > Where > What の優先度
 - ターン1+: 回答を分析→該当する5W次元のinsightを吸収してresolved
@@ -246,7 +254,11 @@ function buildPlannerPrompt({ userMessage, anchor, latestGoal, confirmedInsights
 # question_type: MGU<60→open, MGU≥60→hypothesis
 # confirmed_insights: 差分のみ${correctionSection}`;
 
-    const user = `${anchorSection}\n${previousState}\n${insightsSection}\n\n## 会話履歴\n${(history || []).map(m => `[${m.role}] ${m.content}`).join('\n')}\n\n## ユーザー最新メッセージ（Turn ${turn}）\n${userMessage}`;
+    const prevQuestionSection = prevAIQuestion
+        ? `## 前回のAI質問\n「${prevAIQuestion}」\n↓ これに対するユーザーの回答が以下の最新メッセージ。この回答から情報を吸収してからnext_questionを生成すること。`
+        : '';
+
+    const user = `${anchorSection}\n${previousState}\n${insightsSection}\n\n## 会話履歴\n${(history || []).map(m => `[${m.role}] ${m.content}`).join('\n')}\n\n${prevQuestionSection}\n\n## ユーザー最新メッセージ（Turn ${turn}）\n${userMessage}`;
 
     return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
@@ -523,6 +535,7 @@ export default async function handler(req, res) {
         let plan = parseLLMJson(await callOpenAI(buildPlannerPrompt({
             userMessage: user_message, anchor, latestGoal, confirmedInsights: insights,
             history: history.map(m => ({ role: m.role, content: m.content })), turn,
+            prevAIQuestion: prevInterviewerMsg,
         })));
         if (!plan) return res.status(500).json({ error: 'Planner出力パースエラー' });
 
@@ -536,7 +549,7 @@ export default async function handler(req, res) {
             plan = parseLLMJson(await callOpenAI(buildPlannerPrompt({
                 userMessage: user_message, anchor, latestGoal, confirmedInsights: insights,
                 history: history.map(m => ({ role: m.role, content: m.content })), turn,
-                managerCorrection: mgr.correction,
+                managerCorrection: mgr.correction, prevAIQuestion: prevInterviewerMsg,
             })));
             if (!plan) break;
             mgr = parseLLMJson(await callOpenAI(buildManagerPrompt({ plannerOutput: plan, anchor, previousInterviewerQuestion: prevInterviewerMsg })));
