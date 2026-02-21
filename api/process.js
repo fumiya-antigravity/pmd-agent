@@ -228,6 +228,7 @@ function buildPlannerPrompt({ userMessage, anchor, latestGoal, confirmedInsights
    - When確認後 → Where or What
    - 全5W確認後 → Whyを深掘り（結果層→価値観層）
 3. ネガティブフレーミング禁止: 「何が困る？」ではなく「何ができるようになる？」
+4. **新しい5W次元に移行するときは question_type = "open"** にすること（まだ情報がないので仮説を立てられない）
 
 # anchor常時チェック
 全質問はanchorに紐づくこと。
@@ -250,8 +251,9 @@ function buildPlannerPrompt({ userMessage, anchor, latestGoal, confirmedInsights
   "confirmed_insights": [{"label":"<要約>","dimension":"why|who|when|where|what","layer":"<layer>","strength":<0-100>,"confirmation_strength":<0-1>,"turn":<n>}],
   "cognitive_filter": {"detected_how":[],"detected_what":[],"instruction":"<説明>"}
 }
-# MGU: 5W解決度に基づく。全5Wがresolvedに近いほど高い
-# question_type: MGU<60→open, MGU≥60→hypothesis
+# MGUとquestion_typeの決定ルール
+# **新しい5W次元に移行する場合 → 常にopen**（その次元の情報がまだないから）
+# 同じ5W次元内で深掘り: MGU<60→open, MGU≥60→hypothesis
 # confirmed_insights: 差分のみ${correctionSection}`;
 
     const prevQuestionSection = prevAIQuestion
@@ -330,11 +332,14 @@ ${resolvedParents}`;
 **質問の内容はPlannerのnext_questionに従う。自分で質問を設計しない。**
 
 # MGU切替（厳守）
-## open（MGU 0〜59%）
-解釈を加えず引き出す。率直に一文。
+## open（question_type=open または 新しい5W次元の質問）
+解釈を加えず引き出す。率直に一文。「つまり」禁止。
 OK: 「なんで壁打ちAIを作りたいの？」
+OK: 「それは誰が使う想定？」
+OK: 「どういう場面で使う？」
+NG: 「つまり、それは誰が使う想定ですか？」← openなのに「つまり」を使ってはいけない
 
-## hypothesis（MGU 60〜79%）
+## hypothesis（question_type=hypothesis かつ 同じ5W次元内の深掘り）
 **あなたの解釈を述べて、Yes/Noで答えられる形にする。**
 OK: 「つまり、Whyを言語化して要件定義の質を上げたいってこと？」
 NG: 「つまり、どのような成果を期待していますか？」← つまり+質問の混合は絶対禁止
