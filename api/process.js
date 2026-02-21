@@ -348,6 +348,75 @@ alignment_score<70→drift_detected=true, correctionは必須`;
 }
 
 // ===================================================
+// Why Discovery まとめ — 4W情報が揃った段階でペインを構造的に整理して提示
+// ===================================================
+function buildSummaryPrompt(plannerOutput, anchor, history) {
+    const insights = plannerOutput.confirmed_insights || [];
+    const dimStatus = plannerOutput.dimension_status || {};
+    const sessionPurpose = plannerOutput.sessionPurpose || '';
+    const questionTree = plannerOutput.question_tree || [];
+
+    // resolved済みの次元情報を収集
+    const resolvedInfo = questionTree
+        .filter(q => q.status === 'resolved' && q.resolved_context)
+        .map(q => `- ${q.dimension?.toUpperCase() || 'WHY'}: ${q.resolved_context}`)
+        .join('\n');
+
+    // 会話履歴からユーザーの発言だけ抽出
+    const userStatements = (history || [])
+        .filter(m => m.role === 'user')
+        .map(m => m.content)
+        .join('\n');
+
+    const system = `あなたは先輩PdMです。ここまでの会話から得られた情報を構造的に整理して、ユーザーに提示してください。
+
+# 目的
+ユーザーのペイン（課題・動機）を構造的にまとめ、「あなたが作りたいものの本質はこういうことですね」と提示する。
+**これ以上質問はしない。まとめて提示するフェーズ。**
+
+# まとめのフォーマット（必ず以下の構造で出力）
+「ここまでの話を整理するね。」から始めて、以下の構造で出力する:
+
+## 構造
+1. **あなたが解決したいペイン（課題）**
+   - ユーザーが言った課題を具体的・明確に書く（抽象的にしない）
+   
+2. **背景（なぜそのペインが生まれるか）**
+   - Whyの回答から、課題が生まれる構造的な理由を整理
+
+3. **利用者と利用場面**
+   - Who: 誰が使うか
+   - When: どういう場面で使うか
+
+4. **まとめ1文**
+   - 「つまり、あなたが作りたいのは〇〇ということだね。」形式
+
+# ルール
+- **情報量を確保する**: 薄い・短いまとめはユーザーを不安にさせる
+- ユーザーの言葉を引用しながら構造的に整理する
+- Howには絶対に触れない（機能、実装方法、手段は一切書かない）
+- 質問は一切しない（「〜ですか？」は禁止）
+- 自然な先輩PdMの口調で書く`;
+
+    const user = `## セッションの目的
+${sessionPurpose}
+
+## ユーザーの元メッセージ
+${anchor?.original_message || ''}
+
+## 4W次元の状態
+${JSON.stringify(dimStatus)}
+
+## 確認済みインサイト
+${resolvedInfo || insights.map(i => `- ${i.dimension || 'why'}: ${i.label} (確度: ${i.strength})`).join('\n')}
+
+## ユーザーの発言内容
+${userStatements}`;
+
+    return [{ role: 'system', content: system }, { role: 'user', content: user }];
+}
+
+// ===================================================
 // Role B (Interviewer) — PRD §3.2 Role B 準拠
 // Planner(Role A)のJSON→ユーザーへの自然な「先輩の言葉」に変換
 // ===================================================
@@ -657,20 +726,32 @@ export default async function handler(req, res) {
             }
         }
 
-        // ── Phase遷移チェック ──
+        // ── Phase遷移チェック: 構造的まとめ生成 ──
         const tree = plan.question_tree || [];
         const allResolved = tree.length > 0 && tree.every(q => q.status === 'resolved');
+        const dimStatus = plan.dimension_status || {};
+        const resolvedDimCount = Object.values(dimStatus).filter(s => s === 'resolved').length;
+        const whyResolved = dimStatus.why === 'resolved' || dimStatus.why === 'partial';
 
-        if (plan.main_goal_understanding >= 80 && allResolved) {
+        // 3次元以上resolvedかつWhyが明確 → 構造的まとめを出す
+        if ((resolvedDimCount >= 3 && whyResolved) || (plan.main_goal_understanding >= 80 && allResolved)) {
+            console.log(`[/api/process] まとめ移行: resolved=${resolvedDimCount}/4, MGU=${plan.main_goal_understanding}`);
+
+            // 構造的まとめを生成
+            const summary = await callOpenAI(buildSummaryPrompt(plan, anchor, history), false, 1000);
+            try { await dbInsert(supabase, 'messages', { session_id, role: 'assistant', content: summary, turn_number: turn }); } catch (e) { /* ignore */ }
+
+            // confirmed_insightsを取得してSLIDER遷移準備
             const { data: latestInsights } = await supabase.from('confirmed_insights').select('*').eq('session_id', session_id).order('strength', { ascending: false });
-            if (!latestInsights || latestInsights.length === 0) {
-                const question = await callOpenAI(buildInterviewerPrompt(plan, user_message, history), false, 500);
-                try { await dbInsert(supabase, 'messages', { session_id, role: 'assistant', content: question, turn_number: turn }); } catch (e) { /* ignore */ }
-                return res.status(200).json({ phase: 'CONVERSATION', message: question, turn, debug: buildDebug(plan, mgr) });
+            if (latestInsights && latestInsights.length > 0) {
+                const sliderData = synthesize(latestInsights, anchor.original_message || '');
+                try { await dbUpdate(supabase, 'sessions', { phase: 'SLIDER' }, 'id', session_id); } catch (e) { /* ignore */ }
+                return res.status(200).json({ phase: 'SUMMARY', message: summary, turn, debug: buildDebug(plan, mgr), next_phase: 'SLIDER', insights: sliderData, session_purpose: plan.sessionPurpose });
             }
-            const sliderData = synthesize(latestInsights, anchor.original_message || '');
+
+            // insightsが足りない場合もまとめは出す
             try { await dbUpdate(supabase, 'sessions', { phase: 'SLIDER' }, 'id', session_id); } catch (e) { /* ignore */ }
-            return res.status(200).json({ phase: 'SLIDER', insights: sliderData, session_purpose: plan.sessionPurpose, turn, debug: buildDebug(plan, mgr) });
+            return res.status(200).json({ phase: 'SUMMARY', message: summary, turn, debug: buildDebug(plan, mgr) });
         }
 
         // ── 会話継続 ──
